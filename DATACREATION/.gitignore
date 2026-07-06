@@ -1,0 +1,6 @@
+venv/
+*slices_tiff/
+*_projections/
+*.zip
+__pycache__/
+*.tiff
