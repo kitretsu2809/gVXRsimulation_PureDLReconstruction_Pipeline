@@ -1,0 +1,8 @@
+numpy
+scikit-image
+trimesh
+gvxrPython3
+torch
+astra-toolbox
+tifffile
+matplotlib
