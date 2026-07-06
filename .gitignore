@@ -1,4 +1,6 @@
 data/
+paper/
+configs/
 outputs/
 scratch/
 __pycache__/
