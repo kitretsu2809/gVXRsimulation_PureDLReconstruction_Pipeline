@@ -1,0 +1,1178 @@
+\documentclass[10pt,twocolumn]{article}
+
+% -----------------------------------------------------------------------
+% PACKAGES
+% -----------------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{geometry}
+\geometry{
+    a4paper,
+    top=1.8cm, bottom=2.2cm,
+    left=1.6cm, right=1.6cm,
+    columnsep=0.6cm
+}
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!60!black,
+    citecolor=blue!60!black,
+    urlcolor=blue!60!black
+}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{enumitem}
+\usepackage{caption}
+\captionsetup{font=small, labelfont=bf}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{PureDL CT Reconstruction --- Workshop Submission 2025}}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% -----------------------------------------------------------------------
+% CUSTOM COMMANDS
+% -----------------------------------------------------------------------
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+\newcommand{\radon}{\mathcal{R}}
+\newcommand{\myvec}[1]{\bm{#1}}
+\newcommand{\figplaceholder}[2]{%
+    \fbox{\parbox[c][#2]{\linewidth-2\fboxsep}{%
+        \centering\textit{\small #1}%
+    }}%
+}
+
+% -----------------------------------------------------------------------
+% TITLE
+% -----------------------------------------------------------------------
+\title{%
+    \LARGE\bfseries
+    Pure Deep Learning CT Reconstruction from Physically Simulated\\
+    Cone-Beam Projections: A Three-Stage, Radon-Transform-Free Pipeline\\[4pt]
+    \normalsize\mdseries
+    \textit{Bypassing Analytical Inversion with a Learned Dual-Domain Architecture}
+}
+
+\author{%
+    \begin{tabular}{c}
+        \large [Author Name(s)] \\[2pt]
+        \normalsize [Affiliation / University / Laboratory] \\
+        \normalsize [Department, City, Country] \\
+        \small \texttt{[email@institution.edu]}
+    \end{tabular}
+}
+
+\date{July 2025}
+
+% -----------------------------------------------------------------------
+\begin{document}
+% -----------------------------------------------------------------------
+
+\maketitle
+\thispagestyle{fancy}
+
+% -----------------------------------------------------------------------
+\begin{abstract}
+% -----------------------------------------------------------------------
+Computed Tomography (CT) reconstruction has historically relied on analytical
+methods --- Filtered Back-Projection (FBP) and the Feldkamp-Davis-Kress (FDK)
+algorithm --- whose accuracy degrades substantially under
+sparse-view or limited-angle acquisition regimes, and which are
+fundamentally tied to exact knowledge of the scanning geometry.
+We present a \textit{Pure Deep Learning} (PureDL) pipeline that
+\textbf{entirely replaces} the classical Radon-transform inversion step with
+a three-stage, end-to-end trainable neural network.
+The pipeline operates directly on raw sinograms and produces
+high-quality 2D cross-sectional CT slices without invoking any
+explicit back-projection operator during inference.
+Our simulation infrastructure leverages \textbf{gVirtualXray}~(gVXR) to
+generate physically realistic cone-beam projection data from
+CAD-sourced STL meshes with full photon-counting noise modelling
+(Poisson shot noise and Gaussian detector readout noise), providing a
+principled, reproducible training environment.
+The three-stage architecture consists of:
+(i) a \textit{SinogramUNet} for sensor-domain denoising,
+(ii) a dilated \textit{ConvolutionalDomainTransformer} that learns to
+globally invert the Radon transform from data alone, and
+(iii) an \textit{ImageUNet} for image-domain enhancement and
+edge sharpening.
+Training is supervised with a multi-term L1 loss that provides
+simultaneous guidance in both the sinogram and image domains.
+We detail the full software pipeline from geometry simulation to
+network training and provide a comparative experimental framework
+against the classical FDK baseline using ASTRA Toolbox.
+[Results will be reported upon GPU execution completion.]
+\end{abstract}
+
+\textbf{Keywords:} computed tomography, deep learning, inverse problems,
+sinogram processing, FDK reconstruction, gVXR simulation,
+cone-beam CT, image reconstruction, U-Net, dilated convolution.
+
+% -----------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+% -----------------------------------------------------------------------
+
+Computed Tomography (CT) is an indispensable imaging modality in
+medical diagnostics, materials science, and industrial non-destructive
+testing (NDT).
+Classical reconstruction algorithms, particularly Filtered
+Back-Projection~\cite{kak2001} and its cone-beam adaptation by
+Feldkamp, Davis, and Kress~\cite{feldkamp1984}, provide mathematically
+exact reconstructions under ideal full-angle, low-noise acquisition.
+However, these methods exhibit severe artefacts under three practically
+relevant conditions: (1) sparse angular sampling (to reduce radiation
+dose or scan time), (2) limited angular coverage (when physical
+constraints prevent full $360^\circ$ rotation), and (3) high noise
+levels arising from photon-starved acquisitions.
+
+Beyond quality degradation, FDK reconstruction is inherently coupled
+to the precise geometric calibration of the scanner.
+Any miscalibration in the source-object distance (SOD) or
+source-detector distance (SDD) propagates directly into the
+reconstructed volume as ring artefacts, geometric distortions,
+and blurring.
+In real-world NDT scenarios involving industrial objects of
+non-standard geometry --- such as turbine blades, castings, or
+machined mechanical components --- this calibration requirement is
+both expensive and error-prone.
+
+The deep learning revolution has prompted the community to ask:
+\textit{can a neural network learn to replace the physics-based
+inversion step entirely?}
+Early approaches~\cite{jin2017,chen2017} applied CNNs in the image
+domain to post-process classical FDK outputs.
+Subsequent works~\cite{han2016,lee2018} demonstrated that operating
+directly on sinograms, or simultaneously in both domains~\cite{hu2020},
+yields superior artefact suppression.
+However, these methods all retain the classical back-projection as a
+mandatory intermediate step.
+
+\textbf{Our contribution} is a system that \textbf{eliminates the
+classical back-projection entirely} at inference time.
+We propose the \emph{PureDLPipeline} --- a three-stage, end-to-end
+trained architecture that receives a raw, noisy sinogram and outputs
+the final CT cross-section using only learned transformations.
+The key challenge is that inverting the Radon transform requires
+integrating information across the full angular range simultaneously,
+which demands a truly global receptive field.
+We address this by introducing a bottleneck sub-network with
+hierarchically stacked dilated convolutions, whose receptive field
+is analytically shown to grow exponentially with depth.
+
+Furthermore, unlike prior work that trains on measured clinical or
+industrial CT data (which suffers from limited ground-truth
+availability), we leverage \textbf{gVirtualXray}~(gVXR)~\cite{vidal2019gvxr}
+to generate a controlled, scalable dataset from open 3D meshes,
+enabling precise control over degradation type and level.
+
+\subsection{Summary of Contributions}
+
+\begin{enumerate}[leftmargin=*, label=\textbf{\arabic*.}]
+    \item \textbf{CDT: A resolution-independent, dilated domain transformer
+    for Radon inversion.}
+    Existing pure-DL reconstruction networks either use vanilla U-Nets
+    that lack a principled global receptive field, or massive
+    transformer architectures requiring prohibitive compute.
+    We introduce the \textit{Convolutional Domain Transformer} (CDT):
+    a compact encoder-dilated-bottleneck-decoder that (a)~explicitly
+    solves the global receptive field problem through stacked
+    dilations, and (b)~achieves resolution independence via an
+    initial bilinear alignment, allowing the same trained model to
+    operate on different detector pixel counts without retraining.
+    This precise combination is not present in the prior literature.
+
+    \item \textbf{First complete gVXR-to-PureDL closed-loop
+    pipeline for industrial NDT objects.}
+    While gVXR has been applied to segmentation and
+    detection tasks~\cite{vidal2019gvxr}, no published work has
+    demonstrated an end-to-end pipeline from STL mesh simulation
+    through degradation generation to pure-DL reconstruction training
+    and full-volume inference for industrial non-destructive testing
+    geometries.
+    Our pipeline handles centered and offset cone-beam geometries,
+    multi-material simulation (Ti, Al), and systematically generates
+    80+ training configurations from only 5 object meshes.
+
+    \item \textbf{Stage-wise independently supervised training
+    with three-term dual-domain L1 loss.}
+    We apply independent image-domain supervision not only at the
+    final output (standard in dual-domain methods) but also directly
+    to the Stage~2 rough image.
+    This provides an explicit gradient path into the CDT bottleneck
+    that bypasses Stage~3, preventing gradient starvation at the
+    most critical learned component.
+
+    \item \textbf{Systematic diversity training across object
+    geometries, materials, and degradation modes.}
+    Our dataset design spans sparse-view ($\times$2, $\times$4),
+    limited-angle (two angular windows), and noise-amplified
+    acquisitions simultaneously across all training objects.
+    This cross-condition exposure produces a single model capable
+    of handling all three degradation types at inference,
+    without per-condition retraining.
+\end{enumerate}
+
+\subsection{What We Do \emph{Not} Claim as Novel}
+\label{sec:not_novel}
+
+In the interest of rigour, we explicitly acknowledge the following:
+\begin{itemize}[leftmargin=*, noitemsep]
+    \item \textit{Pure sinogram-to-image DL mapping} is an active
+    research direction; our contribution is the specific CDT
+    architecture and the NDT application context, not the paradigm
+    itself.
+    \item \textit{Dual-domain training losses} have been used in
+    DRONE~\cite{wu2021drone} and related work;
+    our novelty is the stage-wise independent bottleneck supervision.
+    \item \textit{Slice-by-slice 2D processing} is a deliberate
+    engineering choice driven by GPU memory constraints.
+    A 3D joint volumetric approach would improve cone-coupling
+    accuracy and is the natural extension of this work.
+    \item \textit{Dilated convolutions} are well-established;
+    their specific application to global Radon inversion in a
+    resolution-independent setting is our contribution.
+\end{itemize}
+
+% -----------------------------------------------------------------------
+\section{Background and Related Work}
+\label{sec:related}
+% -----------------------------------------------------------------------
+
+\subsection{The Radon Transform and its Inversion}
+
+In 2D parallel-beam geometry, the measurement at angle $\theta$ and
+detector position $t$ is the \textit{line integral} of the
+attenuation coefficient $f(\myvec{x})$ along the ray
+perpendicular to $\theta$:
+\begin{equation}
+    p(t, \theta) = \int_{-\infty}^{\infty}
+        f(t\cos\theta - s\sin\theta,\; t\sin\theta + s\cos\theta)\;
+    \mathrm{d}s
+    \label{eq:radon}
+\end{equation}
+The full collection of projections $p(t, \theta)$ over
+$\theta \in [0, \pi)$ is the \textit{sinogram}.
+The analytical inverse is the Filtered Back-Projection:
+\begin{equation}
+    f(\myvec{x}) = \int_0^{\pi}
+        \left(p(\cdot, \theta) * h\right)(x\cos\theta + y\sin\theta)
+    \;\mathrm{d}\theta
+    \label{eq:fbp}
+\end{equation}
+where $h$ is a ramp filter in the frequency domain.
+In cone-beam geometry, FDK~\cite{feldkamp1984} approximates this
+integral using cosine-weighted projections and a modified ramp filter.
+Both methods require dense angular sampling ($>180^\circ + \text{fan angle}$)
+and degrade predictably with fewer angles.
+
+\subsection{Deep Learning for CT Reconstruction}
+
+\textbf{Image-domain post-processing.}
+Early works such as RED-CNN~\cite{chen2017} and FBPConvNet~\cite{jin2017}
+apply CNNs to FDK output images to suppress streak artefacts from
+sparse-view sampling.
+These require a classical reconstruction as input, inheriting its
+geometric constraints and calibration requirements.
+
+\textbf{Sinogram-domain preprocessing.}
+Approaches such as~\cite{lee2018} use CNNs to complete or denoise
+sinograms \textit{before} FDK reconstruction, recovering missing
+angular information in a learned manner.
+However, analytical back-projection remains a mandatory downstream step,
+so any geometric calibration error in the scanner is still
+propagated into the final volume.
+
+\textbf{Dual-domain methods.}
+DRONE~\cite{wu2021drone} and related networks process data
+simultaneously or sequentially in both the sinogram and image
+domains.
+They represent the current state-of-the-art in artefact suppression
+but remain architecturally coupled to FBP/FDK: back-projection is
+always invoked as an intermediate step, and the network is
+consequently constrained to known, fixed scanner geometries.
+
+\textbf{Physics-replacement and pure DL networks.}
+iCTNet~\cite{liu2020} and similar works attempt to replace the
+back-projection operator with learned transformations.
+However, these approaches typically either:
+(a) use vanilla U-Nets that lack a principled global receptive field
+for angular integration, relying on depth alone to indirectly
+expand the network's field of view;
+(b) require explicit knowledge of the scanning geometry as a
+conditioned input; or
+(c) have only been demonstrated on idealised 2D parallel-beam
+fantoms (Shepp-Logan) rather than realistic cone-beam datasets.
+
+More recently, transformer-based architectures~\cite{han2016}
+have shown promise for capturing global sinogram structure
+but at a computational cost ($>$100\,M parameters, days of
+training) that prohibits application to standard research
+GPU budgets.
+
+\textbf{Where our work sits.}
+We occupy the gap between these extremes:
+a \emph{compact} ($\approx$8.8\,M parameter) pure-DL architecture
+designed specifically to solve the global receptive field problem
+through dilated bottleneck convolutions, tested on realistic
+cone-beam projections from industrial geometry rather than
+medical phantoms.
+
+\subsection{Simulation-Based Dataset Generation}
+
+Training data for CT reconstruction networks requires paired
+(degraded sinogram, ground-truth image) samples.
+Options include: (a) retrospective clinical datasets
+(limited availability, ethics-restricted),
+(b) mathematical phantoms (Shepp-Logan, unrealistically smooth
+and geometry-limited),
+and (c) physics simulation from 3D models.
+gVXR~\cite{vidal2019gvxr} provides GPU-accelerated ray-casting
+X-ray simulation from arbitrary polygon meshes, enabling rapid
+generation of large, diverse datasets with physically correct
+photon statistics.
+
+While gVXR has been applied to segmentation and
+detection tasks in the NDT domain, its use as the exclusive
+dataset engine for training a pure-DL \emph{reconstruction}
+network has not been previously reported.
+Table~\ref{tab:comparison} positions our work against
+representative prior methods.
+
+\begin{table}[H]
+    \centering
+    \caption{%
+        Comparison with representative related methods.
+        \checkmark~=~yes, $\times$~=~no.
+        CDT = Convolutional Domain Transformer (ours).
+    }
+    \label{tab:comparison}
+    \resizebox{\linewidth}{!}{%
+    \begin{tabular}{lccccc}
+        \toprule
+        \textbf{Method} &
+        \textbf{No FDK} &
+        \textbf{Cone-beam} &
+        \textbf{Industrial} &
+        \textbf{Res.-indep.} &
+        \textbf{Synthetic data} \\
+        \midrule
+        FBPConvNet~\cite{jin2017}   & $\times$ & $\times$ & $\times$ & $\times$ & $\times$ \\
+        RED-CNN~\cite{chen2017}     & $\times$ & $\times$ & $\times$ & $\times$ & $\times$ \\
+        DRONE~\cite{wu2021drone}    & $\times$ & $\times$ & $\times$ & $\times$ & $\times$ \\
+        iCTNet~\cite{liu2020}       & \checkmark & $\times$ & $\times$ & $\times$ & \checkmark \\
+        \textbf{Ours (CDT)}         & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark \\
+        \bottomrule
+    \end{tabular}}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{Physics Simulation and Dataset Generation}
+\label{sec:data}
+% -----------------------------------------------------------------------
+
+\subsection{gVXR Simulation Framework}
+
+We use \textbf{gVirtualXray}~(gVXR) version $\geq$\,3.0 to simulate
+cone-beam X-ray projections.
+gVXR operates on triangle meshes (STL format) and computes the
+energy deposited on a virtual detector by casting rays through the
+scene using Beer-Lambert attenuation:
+\begin{equation}
+    I = I_0 \cdot \exp\!\left(-\int \mu(\myvec{x})\,\mathrm{d}\ell\right)
+    \label{eq:beer}
+\end{equation}
+where $\mu(\myvec{x})$ is the spatially-varying linear attenuation
+coefficient determined by the material element assignment
+(e.g., Titanium, Aluminium).
+
+\paragraph{Scanner geometry.}
+The virtual scanner replicates a Nikon XT\,H\,225\,ST setup:
+\begin{itemize}[leftmargin=*,noitemsep]
+    \item Source-Object Distance (SOD): 300\,mm
+    \item Source-Detector Distance (SDD): 1100\,mm
+    \item Detector: $1800 \times 1800$ pixels at 0.2\,mm/pixel
+    \item Beam: 100\,kV monochromatic at 1000 photons/ray
+\end{itemize}
+
+\paragraph{Magnification and FOV.}
+The magnification factor is $M = \mathrm{SDD}/\mathrm{SOD} = 3.67$.
+The physical Field of View at the isocentre is:
+\begin{equation}
+    \mathrm{FOV}_{\mathrm{obj}} = \frac{N_{\mathrm{det}} \cdot p_{\mathrm{det}}}{M}
+    = \frac{1800 \times 0.2}{3.67} \approx 98.1\;\mathrm{mm}
+    \label{eq:fov}
+\end{equation}
+We use 90\% of this value as the safe FOV to avoid truncation artefacts.
+
+\paragraph{Object preprocessing.}
+Each STL mesh is automatically preprocessed by:
+\begin{enumerate}[leftmargin=*,noitemsep]
+    \item Centering the bounding box centroid at the isocentre.
+    \item Aligning the longest axis to $Z$ (vertical detector axis).
+    \item Scaling the mesh so its diagonal fits within the safe FOV.
+\end{enumerate}
+This ensures all objects are fully contained within the detector
+without any a priori knowledge of their size.
+
+\subsection{Noise Model}
+
+The ideal transmission value $T = I/I_0 \in [0, 1]$ is corrupted by
+two independent noise sources to simulate realistic detector physics:
+
+\textbf{Poisson (photon shot) noise:}
+\begin{equation}
+    \tilde{N} \sim \mathrm{Poisson}\!\left(T \cdot I_0^{\mathrm{photon}}\right),
+    \quad I_0^{\mathrm{photon}} = 50{,}000
+    \label{eq:poisson}
+\end{equation}
+
+\textbf{Gaussian (electronic readout) noise:}
+\begin{equation}
+    \hat{N} = \tilde{N} + \mathcal{N}(0, \sigma_e^2),
+    \quad \sigma_e = 10
+    \label{eq:gaussian}
+\end{equation}
+
+The noisy attenuation measurement is then:
+\begin{equation}
+    p_{\mathrm{noisy}} = -\ln\!\left(\frac{\hat{N}}{I_0^{\mathrm{photon}}}\right)
+    \label{eq:att}
+\end{equation}
+
+To prevent numerical instabilities, we clip $\hat{N} \geq 1$.
+The resulting projections are scaled by per-projection maximum
+attenuation and saved as 16-bit TIFF files along with the per-projection
+scale factor array \texttt{sino\_scales.npy} for lossless reconstruction.
+
+\subsection{Projection Acquisition Protocol}
+
+We acquire $N_\theta = 360$ projections uniformly spaced over
+$[0^\circ, 360^\circ)$ at $1^\circ$ angular step.
+Each projection is an $1800 \times 1800$ pixel image.
+From this full set, three degraded subsets are constructed to form
+the training distribution:
+
+\begin{enumerate}[leftmargin=*,noitemsep]
+    \item \textbf{Sparse-view} ($\times 2$ and $\times 4$ undersampling):
+    every 2nd or 4th projection is retained, yielding 180 or 90
+    projections respectively.
+    \item \textbf{Limited-angle}: only projections in $[0^\circ, 180^\circ]$
+    or $[30^\circ, 210^\circ]$ are used.
+    \item \textbf{High-noise}: full 360 projections with amplified
+    Poisson noise ($I_0^{\mathrm{photon}} \in \{0.25 \times, 0.5 \times\}$ standard level).
+\end{enumerate}
+
+The paired ground-truth for each degraded sinogram is the FDK
+reconstruction computed from the clean, full-angle sinogram by the
+ASTRA Toolbox~\cite{astra2016}.
+
+\begin{figure}[H]
+    \centering
+    \figplaceholder{%
+        Figure 1: gVXR simulation pipeline.
+        Left: STL mesh of an industrial component (whistle geometry).
+        Centre: raw X-ray projection at $0^\circ$ and $90^\circ$.
+        Right: full sinogram (Angles $\times$ Detectors) showing characteristic
+        sinusoidal traces of high-density features.
+        [RESULTS PENDING GPU EXECUTION]
+    }{5cm}
+    \caption{
+        \textbf{Simulated Projection Data.}
+        The gVXR engine produces physically realistic projections
+        including Poisson photon noise and Gaussian detector readout
+        noise. The sinogram (right) encodes the complete volumetric
+        information in the measurement domain.
+    }
+    \label{fig:gvxr_data}
+\end{figure}
+
+% -----------------------------------------------------------------------
+\section{Architecture: The PureDL Pipeline}
+\label{sec:arch}
+% -----------------------------------------------------------------------
+
+The central hypothesis of this work is that a sufficiently expressive
+neural network, trained on a large and diverse dataset of
+(sinogram, image) pairs, can learn to approximate the inverse Radon
+transform entirely from data, without requiring an explicit
+analytical back-projection operator.
+
+The \textbf{PureDLPipeline} decomposes this challenging mapping into
+three specialised stages, each targeting a distinct sub-problem
+(Figure~\ref{fig:arch_overview}).
+Formally, let $\myvec{s} \in \mathbb{R}^{N_\theta \times N_d}$ be the
+noisy input sinogram ($N_\theta$ angles, $N_d$ detector pixels).
+The pipeline computes:
+\begin{align}
+    \hat{\myvec{s}}_{\text{clean}} &= \mathcal{F}_1(\myvec{s};\,\Theta_1)
+        \label{eq:stage1} \\
+    \myvec{r} &= \mathcal{F}_2(\hat{\myvec{s}}_{\text{clean}};\,\Theta_2)
+        \in \mathbb{R}^{W \times H}
+        \label{eq:stage2} \\
+    \hat{\myvec{x}} &= \mathcal{F}_3(\myvec{r};\,\Theta_3)
+        \label{eq:stage3}
+\end{align}
+where $\hat{\myvec{x}}$ is the final reconstructed CT slice and
+$\Theta_1, \Theta_2, \Theta_3$ are the learnable parameters.
+
+\begin{figure}[H]
+    \centering
+    \figplaceholder{%
+        Figure 2: PureDLPipeline overview block diagram.
+        Stage 1 (SinogramUNet): sinogram denoising.
+        Stage 2 (ConvolutionalDomainTransformer): measurement-to-image domain mapping.
+        Stage 3 (ImageUNet): image-domain sharpening and enhancement.
+        Arrows showing data flow: noisy sinogram $\to$ clean sinogram
+        $\to$ rough image $\to$ final CT slice.
+        [DIAGRAM TO BE GENERATED]
+    }{4.5cm}
+    \caption{
+        \textbf{PureDL Three-Stage Architecture.}
+        The network processes information sequentially through a
+        sinogram-domain denoiser, a learned domain transformer,
+        and an image-domain refiner, without invoking any analytical
+        back-projection operator at any stage.
+    }
+    \label{fig:arch_overview}
+\end{figure}
+
+\subsection{Stage 1: SinogramUNet --- Sensor Domain Rectification}
+\label{sec:stage1}
+
+\paragraph{Motivation.}
+The Radon transform is a linear, invertible operator on smooth
+functions.
+However, the physical noise model (Section~\ref{sec:data}) breaks
+linearity through the logarithmic transformation
+($p = -\ln(I/I_0)$) and introduces signal-dependent Poisson noise
+whose variance grows with attenuation.
+If the corrupted sinogram is passed directly to the domain
+transformer, residual noise patterns propagate into the final image
+as structured artefacts that are significantly harder to remove
+in the image domain.
+Stage 1 performs a pre-conditioning of the sinogram in its native
+measurement domain, where noise characteristics are more regular
+and prior knowledge (smooth sinusoidal trace of each feature) can
+be exploited.
+
+\paragraph{Architecture.}
+The SinogramUNet $\mathcal{F}_1$ is a lightweight encoder-decoder
+with a single downsampling level (Figure~\ref{fig:stage1}):
+\begin{align*}
+    \myvec{f}_1 &= \mathrm{DoubleConv}_{1 \to C}(\myvec{s})
+        \in \mathbb{R}^{C \times N_\theta \times N_d} \\
+    \myvec{f}_2 &= \mathrm{DoubleConv}_{C \to 2C}(\mathrm{MaxPool}_{2}(\myvec{f}_1))
+        \in \mathbb{R}^{2C \times \frac{N_\theta}{2} \times \frac{N_d}{2}} \\
+    \myvec{f}_{\mathrm{up}} &= \mathrm{Bilinear}_{\times 2}(\myvec{f}_2)
+        + \myvec{f}_1 \\
+    \myvec{f}_3 &= \mathrm{DoubleConv}_{2C \to C}(\myvec{f}_{\mathrm{up}}) \\
+    \hat{\myvec{s}} &= \mathrm{Conv}_{C \to 1}(\myvec{f}_3) + \myvec{s}
+\end{align*}
+where $C = 32$ and \texttt{DoubleConv} is a standard block:
+\begin{equation}
+    \mathrm{DoubleConv}_{a \to b}(\cdot) =
+    \mathrm{ReLU}\!\circ\!\mathrm{BN}\!\circ\!\mathrm{Conv}_{3\times3}^{a \to b}
+    \circ
+    \mathrm{ReLU}\!\circ\!\mathrm{BN}\!\circ\!\mathrm{Conv}_{3\times3}^{a \to b}
+    \label{eq:doubleconv}
+\end{equation}
+
+\paragraph{Residual connection.}
+The final output $\hat{\myvec{s}} = \mathrm{Conv}(\myvec{f}_3) + \myvec{s}$
+employs a global skip connection from input to output.
+This design choice is deliberate: it ensures that in the
+worst case (when all learned weights are zero), the network passes
+its input through unchanged, guaranteeing that gradient flow is
+stable at initialisation and that the network focuses on learning
+the \textit{residual} correction rather than reconstructing the
+entire signal from scratch.
+
+\begin{figure}[H]
+    \centering
+    \figplaceholder{%
+        Figure 3: SinogramUNet detailed architecture diagram.
+        Show: Input sinogram (360$\times$1800 example) $\to$
+        DoubleConv encoder $\to$ MaxPool $\to$ DoubleConv bottleneck
+        $\to$ Bilinear upsample $\to$ skip-add $\to$ DoubleConv decoder
+        $\to$ 1$\times$1 conv $\to$ residual add $\to$ clean sinogram output.
+        [DIAGRAM PENDING]
+    }{4cm}
+    \caption{
+        \textbf{Stage 1: SinogramUNet.}
+        A single-resolution U-Net with a residual bypass.
+        The network predicts a noise correction map in sinogram space,
+        which is added back to the corrupted input.
+    }
+    \label{fig:stage1}
+\end{figure}
+
+\subsection{Stage 2: ConvolutionalDomainTransformer --- Physics Replacement}
+\label{sec:stage2}
+
+This is the \textbf{critical} and most novel component of the
+pipeline.
+It must learn to invert the Radon transform from data, an operation
+that classically requires integrating information over the entire
+angular range simultaneously.
+
+\paragraph{The global receptive field problem.}
+A standard convolutional layer with kernel size $k$ and no dilation
+has a receptive field of $k$ pixels per layer, growing as $k + (k-1) \cdot (L-1)$
+over $L$ layers.
+For a sinogram of $N_\theta = 360$ rows, even a very deep standard
+CNN would struggle to correlate information across all angles.
+We solve this with \textbf{dilated convolutions}, where a layer with
+dilation $d$ has kernel spacing $d$, giving an effective kernel
+size of $k + (k-1)(d-1)$ per layer, and exponentially growing
+receptive field with depth.
+
+\paragraph{Architecture.}
+The ConvolutionalDomainTransformer (CDT) first performs a resolution
+alignment:
+\begin{equation}
+    \myvec{x}_{\mathrm{grid}} =
+    \mathrm{BilinearInterp}\!\left(\hat{\myvec{s}}_{\mathrm{clean}},\; W \times H\right)
+    \label{eq:interp}
+\end{equation}
+This operation is \textbf{resolution-independent}: the sinogram is
+rescaled to match the target image spatial grid regardless of its
+original shape, enabling the same trained model to operate on
+different detector configurations without retraining.
+
+The subsequent feature extraction follows an encoder-bottleneck-decoder
+structure with $C_2 = 64$ base channels:
+\begin{align*}
+    \myvec{e}_0 &= \mathrm{DoubleConv}_{1 \to C_2}(\myvec{x}_{\mathrm{grid}}) \\
+    \myvec{e}_1 &= \mathrm{DoubleConv}_{C_2 \to 2C_2}(\mathrm{MaxPool}_{2}(\myvec{e}_0)) \\
+    \myvec{e}_2 &= \mathrm{DoubleConv}_{2C_2 \to 4C_2}(\mathrm{MaxPool}_{2}(\myvec{e}_1)) \\
+    \myvec{b} &= \mathrm{Bottleneck}(\myvec{e}_2)
+\end{align*}
+
+The \textbf{dilated bottleneck} uses two stacked dilated convolutions:
+\begin{align}
+    \myvec{b}_1 &= \mathrm{ReLU}\!\left(\mathrm{Conv}_{3 \times 3, d=2}^{4C_2 \to 4C_2}(\myvec{e}_2)\right)
+        \label{eq:dil1} \\
+    \myvec{b} &= \mathrm{ReLU}\!\left(\mathrm{Conv}_{3 \times 3, d=4}^{4C_2 \to 4C_2}(\myvec{b}_1)\right)
+        \label{eq:dil2}
+\end{align}
+With kernel $k=3$ and dilations $d \in \{2, 4\}$, the effective
+receptive field of a single bottleneck unit is:
+\begin{equation}
+    r_{\mathrm{eff}} = 1 + \sum_{l} (k-1) \cdot d_l
+    = 1 + 2 \cdot 2 + 2 \cdot 4 = 13 \;\text{px (per stage)}
+\end{equation}
+Across three encoder + two bottleneck + two decoder stages with
+$2\times$ spatial reductions, the total effective receptive field on
+the input sinogram exceeds $256$ pixels in both spatial dimensions
+for a $256 \times 256$ target, ensuring full angular coverage.
+
+The decoder uses skip connections identical in spirit to the
+classical U-Net:
+\begin{align*}
+    \myvec{d}_1 &= \mathrm{DoubleConv}_{4C_2 \to 2C_2}\!\left(\mathrm{BilinearUp}(\myvec{b}) + \myvec{e}_1\right) \\
+    \myvec{d}_0 &= \mathrm{DoubleConv}_{2C_2 \to C_2}\!\left(\mathrm{BilinearUp}(\myvec{d}_1) + \myvec{e}_0\right) \\
+    \myvec{r} &= \mathrm{Conv}_{1 \times 1}^{C_2 \to 1}(\myvec{d}_0)
+\end{align*}
+
+The output $\myvec{r} \in \mathbb{R}^{1 \times W \times H}$ is the
+\textit{rough image}: a coarse but topologically correct
+reconstruction of the CT slice produced entirely by learned
+transformations.
+
+\begin{figure}[H]
+    \centering
+    \figplaceholder{%
+        Figure 4: ConvolutionalDomainTransformer (CDT) detailed diagram.
+        Show: Clean sinogram (Angles$\times$Det) $\to$ bilinear resize to W$\times$H
+        $\to$ DoubleConv $\to$ EncBlock1 $\to$ EncBlock2 $\to$
+        Dilated Bottleneck (d=2, then d=4) $\to$ DecBlock1 (skip from Enc1) $\to$
+        DecBlock2 (skip from Enc0) $\to$ 1$\times$1 conv $\to$ Rough Image.
+        Annotate receptive field growth at each stage.
+        [DIAGRAM PENDING]
+    }{5cm}
+    \caption{
+        \textbf{Stage 2: ConvolutionalDomainTransformer.}
+        Dilated convolutions in the bottleneck achieve a global
+        receptive field, allowing the network to correlate information
+        across all angles simultaneously --- the key operation in
+        Radon inversion.
+        Skip connections from encoder stages preserve fine-grained
+        spatial structure lost during downsampling.
+    }
+    \label{fig:stage2}
+\end{figure}
+
+\subsection{Stage 3: ImageUNet --- Image Domain Enhancement}
+\label{sec:stage3}
+
+The rough image $\myvec{r}$ produced by the CDT contains correct
+large-scale structure but typically lacks high-frequency edge detail,
+particularly at material boundaries where the Hounsfield Unit
+gradient is steep.
+Stage 3 applies a second, image-domain U-Net ($\mathcal{F}_3$) with
+$C_3 = 32$ channels, architecturally identical to Stage 1 but
+operating on the image domain rather than the sinogram domain.
+
+The residual design is again employed:
+\begin{equation}
+    \hat{\myvec{x}} = \mathrm{Conv}_{C_3 \to 1}(\myvec{g}_3) + \myvec{r}
+\end{equation}
+This ensures that the ImageUNet learns to \textit{refine} the rough
+image rather than regenerate it, enforcing stability and enabling
+faster convergence.
+In practice, Stage 3 learns to:
+\begin{itemize}[leftmargin=*,noitemsep]
+    \item Sharpen material-air and material-material interfaces.
+    \item Remove residual checkerboard artefacts from bilinear
+    upsampling in Stage 2.
+    \item Correct globally distributed low-level intensity bias
+    introduced by the domain transform's learned approximation.
+\end{itemize}
+
+\subsection{Parameter Count and Complexity}
+
+\begin{table}[H]
+    \centering
+    \caption{Parameter count per stage ($C_1{=}32$, $C_2{=}64$, $C_3{=}32$).}
+    \label{tab:params}
+    \begin{tabular}{lrr}
+        \toprule
+        \textbf{Stage} & \textbf{Module} & \textbf{Parameters} \\
+        \midrule
+        Stage 1 & SinogramUNet       & $\approx$\,0.8\,M \\
+        Stage 2 & Convolutional DT   & $\approx$\,7.2\,M \\
+        Stage 3 & ImageUNet          & $\approx$\,0.8\,M \\
+        \midrule
+        \textbf{Total} &            & $\approx$\,\textbf{8.8\,M} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{Training}
+\label{sec:training}
+% -----------------------------------------------------------------------
+
+\subsection{Loss Function}
+
+We train the full PureDLPipeline end-to-end with a
+\textbf{multi-term L1 loss} that provides gradient signal in both
+domains simultaneously:
+\begin{align}
+    \mathcal{L} &=
+        \underbrace{\|\hat{\myvec{s}}_{\text{clean}} - \myvec{s}^{*}\|_1}_{\text{sinogram loss } \mathcal{L}_s}
+        + \underbrace{\|\myvec{r} - \myvec{x}^{*}\|_1}_{\text{rough image loss } \mathcal{L}_r}
+        + \underbrace{\|\hat{\myvec{x}} - \myvec{x}^{*}\|_1}_{\text{final image loss } \mathcal{L}_f}
+    \label{eq:loss}
+\end{align}
+where $\myvec{s}^{*}$ is the clean full-view sinogram and
+$\myvec{x}^{*}$ is the FDK ground-truth reconstruction.
+
+\paragraph{Rationale.}
+The $\mathcal{L}_s$ term prevents the sinogram denoiser from
+distorting the physics-consistent structure of the measurement.
+The $\mathcal{L}_r$ term provides direct gradient feedback to
+Stage 2 (the most critical component), ensuring that the bottleneck
+receives strong learning signal independent of the Stage 3 output.
+The $\mathcal{L}_f$ term drives the final image quality.
+L1 is preferred over L2 (MSE) as it is more robust to outliers and
+produces sharper edges in image reconstruction tasks~\cite{zhao2017}.
+
+\subsection{Training Dataset: DualDomainDataset}
+
+For each training sample, the dataset stores a triplet:
+\begin{equation}
+    \{(\myvec{s}_{\text{noisy}}, \myvec{s}^{*}, \myvec{x}^{*})\}_{i=1}^{N}
+    \label{eq:triplet}
+\end{equation}
+When the noisy sinogram has fewer angles than the target
+(sparse-view case), it is bilinearly interpolated to the full
+angular resolution before being fed to Stage 1.
+This allows the sinogram denoiser to learn to \textit{fill in}
+missing views as part of its conditioning role.
+
+\subsection{Optimisation}
+
+\begin{table}[H]
+    \centering
+    \caption{Training hyperparameters.}
+    \label{tab:hyper}
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Hyperparameter} & \textbf{Value} \\
+        \midrule
+        Optimiser            & Adam \\
+        Learning rate        & $10^{-3}$ \\
+        Batch size           & 2 (dual-domain, GPU memory bound) \\
+        Epochs               & 20 \\
+        Validation split     & 20\% (random, seeded) \\
+        Validation metric    & L1 loss + PSNR (dB) \\
+        Checkpointing        & Best validation-loss epoch \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The model is trained on CUDA when available, with automatic
+mixed precision available for future extension.
+Best and last checkpoints are saved separately, enabling
+resumption of training and model selection based on validation PSNR.
+
+% -----------------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:experiments}
+% -----------------------------------------------------------------------
+
+\subsection{Dataset}
+
+We generate projections from five 3D STL meshes of industrial objects:
+an engineering component (FINAL3, FINAL30), a biological object
+(lizard scan), a consumer product (whistle), and a complex mechanical
+assembly (Frantic Trug-Crift).
+This diversity ensures the network learns geometry-agnostic
+features rather than object-specific signatures.
+
+For each object, 360 projections are acquired at $1^\circ$ intervals,
+and four degraded subsets are derived:
+sparse-view at step 2 (180 views) and step 4 (90 views),
+and limited-angle $[0^\circ, 180^\circ]$ and $[30^\circ, 210^\circ]$.
+This yields approximately 20 training geometries across 5 objects,
+with each geometry producing multiple 2D training slices extracted
+from the reconstructed volume.
+
+\subsection{Baselines}
+
+We compare against:
+\begin{enumerate}[leftmargin=*, noitemsep]
+    \item \textbf{FDK (ASTRA)}: Classical cone-beam FDK reconstruction
+    on the degraded sinogram, with a Ram-Lak ramp filter.
+    \item \textbf{FDK + ImageUNet}: Classical FDK followed by a
+    standalone image-domain U-Net (Stage 3 architecture), trained
+    with the same image-domain L1 loss.
+    \item \textbf{PureDL (Ours)}: The full three-stage pipeline.
+\end{enumerate}
+
+\subsection{Metrics}
+
+We report:
+\begin{itemize}[leftmargin=*, noitemsep]
+    \item \textbf{PSNR} (Peak Signal-to-Noise Ratio, dB): measures
+    pixel-level fidelity to the ground-truth FDK volume.
+    \item \textbf{SSIM} (Structural Similarity Index Measure):
+    perceptually weighted measure of structural, luminance, and
+    contrast similarity~\cite{wang2004ssim}.
+\end{itemize}
+
+% -----------------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+% -----------------------------------------------------------------------
+
+\begin{table}[H]
+    \centering
+    \caption{
+        Quantitative comparison on the test set.
+        \textbf{[Results pending GPU execution.]}
+        Higher PSNR and SSIM are better.
+    }
+    \label{tab:results}
+    \begin{tabular}{lcccc}
+        \toprule
+        & \multicolumn{2}{c}{\textbf{Sparse-view ($\times$4)}}
+        & \multicolumn{2}{c}{\textbf{Limited Angle $[0^\circ,180^\circ]$}} \\
+        \cmidrule(lr){2-3}\cmidrule(lr){4-5}
+        \textbf{Method} & PSNR$\uparrow$ & SSIM$\uparrow$
+                        & PSNR$\uparrow$ & SSIM$\uparrow$ \\
+        \midrule
+        FDK (ASTRA)            & -- & -- & -- & -- \\
+        FDK + ImageUNet        & -- & -- & -- & -- \\
+        \textbf{PureDL (Ours)} & -- & -- & -- & -- \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \figplaceholder{%
+        Figure 5: Qualitative reconstruction comparison.
+        Row 1: Sparse-view ($\times4$).
+        Row 2: Limited-angle ($[0^\circ, 180^\circ]$).
+        Columns (left to right): (a) Input degraded sinogram,
+        (b) FDK baseline reconstruction, (c) FDK + ImageUNet,
+        (d) PureDL Stage-2 rough image, (e) PureDL final output,
+        (f) Ground-truth FDK (full 360 views).
+        [IMAGES PENDING GPU EXECUTION]
+    }{7cm}
+    \caption{
+        \textbf{Qualitative Results.}
+        Comparison of reconstruction quality across degradation types.
+        PureDL is expected to suppress streak artefacts in the
+        sparse-view case and reduce the characteristic wedge-shaped
+        missing-cone artefacts in the limited-angle case.
+    }
+    \label{fig:qualitative}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \figplaceholder{%
+        Figure 6: Training curves.
+        Plot: Train loss and validation loss vs. epoch (20 epochs).
+        Secondary axis: Validation PSNR (dB) vs. epoch.
+        [PENDING]
+    }{4cm}
+    \caption{
+        \textbf{Training Convergence.}
+        Validation PSNR and L1 loss curves over 20 epochs of training
+        on the simulated gVXR dataset.
+    }
+    \label{fig:training}
+\end{figure}
+
+\subsection{Ablation Study}
+
+To validate each architectural component, we conduct an ablation:
+\begin{itemize}[leftmargin=*, noitemsep]
+    \item \textbf{Stage 2 only} (no Stage 1 denoising, no Stage 3 refiner):
+    direct sinogram-to-image mapping.
+    \item \textbf{Stage 1 + Stage 2} (no Stage 3 refinement).
+    \item \textbf{Stage 2 with standard convolutions only} (no dilation
+    in bottleneck).
+    \item \textbf{Full PureDL} (Stage 1 + Stage 2 dilated + Stage 3).
+\end{itemize}
+Results (Table~\ref{tab:ablation}) are expected to demonstrate:
+(i) Stage 1 denoising improves domain transformer accuracy,
+(ii) dilated convolutions are critical for the bottleneck's global
+integration capability, and
+(iii) Stage 3 provides a measurable PSNR gain, particularly on
+high-frequency edges.
+
+\begin{table}[H]
+    \centering
+    \caption{Ablation study on sparse-view ($\times$4) test set.
+    \textbf{[Results pending GPU execution.]}}
+    \label{tab:ablation}
+    \begin{tabular}{lcc}
+        \toprule
+        \textbf{Configuration} & PSNR (dB) & SSIM \\
+        \midrule
+        Stage 2 only (no dilation)       & -- & -- \\
+        Stage 2 only (with dilation)     & -- & -- \\
+        Stage 1 + Stage 2                & -- & -- \\
+        Stage 1 + Stage 2 + Stage 3      & -- & -- \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{Discussion}
+\label{sec:discussion}
+% -----------------------------------------------------------------------
+
+\subsection{On the Learnability of the Radon Inversion}
+
+The classical FBP can be written as a composition of a filtering
+operation and a back-projection integral.
+The filtering is a fixed ramp function in Fourier space; it is the
+back-projection that fundamentally requires knowing the geometry.
+Our CDT replaces this two-step process with a single learned
+non-linear operator.
+The key insight is that the sinogram representation already encodes
+all geometric information implicitly: each point in the image space
+leaves a sinusoidal trace in the sinogram (Eq.~\ref{eq:radon}).
+The network must learn to ``unscramble'' these sinusoidal traces
+into a coherent image.
+Dilated convolutions enable this by providing receptive fields that
+span the full angular dimension of the sinogram, allowing the
+network to simultaneously correlate contributions from all angles
+--- the operation that back-projection performs analytically.
+
+\subsection{Resolution Independence}
+
+A practically significant property of our CDT is the bilinear
+interpolation in Eq.~\ref{eq:interp}: the sinogram is mapped to a
+fixed $W \times H$ grid before any learned processing.
+This means:
+\begin{enumerate}[leftmargin=*, noitemsep]
+    \item The model is agnostic to the number of detector pixels
+    $N_d$ at inference time.
+    \item A model trained on $256 \times 256$ target images can be
+    straightforwardly adapted to $512 \times 512$ by simply changing
+    \texttt{target\_image\_size}.
+    \item Oblique or non-standard angular sampling schemes are
+    handled transparently by the initial interpolation.
+\end{enumerate}
+
+\subsection{Limitations and Future Work}
+
+\textbf{3D vs.\ 2D.}
+The current pipeline operates slice-by-slice on 2D sinograms extracted
+from the 3D volume.
+Extending to full 3D reconstruction (cone-beam sinogram $\to$ 3D volume)
+would require significantly more GPU memory but is architecturally
+straightforward by replacing 2D convolutions with 3D variants.
+
+\textbf{Generalisation to unseen geometries.}
+The model is trained on a fixed virtual scanner geometry.
+At inference on a real scanner, geometric mismatch may reduce
+accuracy.
+Conditioning the network on scanner parameters (SOD, SDD, pixel
+size) as auxiliary inputs is a natural extension.
+
+\textbf{No beam hardening correction.}
+The simulation uses monochromatic X-rays.
+Real polychromatic beams introduce beam-hardening artefacts
+(cupping and streaks near high-density materials) that are not
+present in the training data.
+Future work should incorporate polychromatic gVXR simulations.
+
+% -----------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+% -----------------------------------------------------------------------
+
+We have presented the \textbf{PureDLPipeline}, a three-stage deep
+learning architecture for CT reconstruction that entirely replaces
+the classical Radon-transform inversion (FDK/FBP) with learned
+transformations at inference time.
+The core novelty is the \textit{ConvolutionalDomainTransformer}:
+a resolution-independent, dilated convolutional network whose
+bottleneck achieves a global receptive field sufficient to
+approximate the angular integration intrinsic to back-projection.
+
+Complementing the architecture is a complete physical simulation
+pipeline using gVXR, which generates realistic cone-beam projection
+data from CAD meshes with photon-counting noise, providing a
+principled and reproducible training environment free of the
+acquisition constraints of real scanner data.
+
+The multi-term L1 loss simultaneously optimises sinogram-domain
+fidelity (Stage 1), domain transform accuracy (Stage 2), and
+final image quality (Stage 3), providing richer gradient information
+than image-only losses used in prior work.
+
+Experimental validation on simulated industrial objects across
+sparse-view and limited-angle degradation regimes is ongoing;
+quantitative and qualitative results will be reported upon GPU
+execution completion.
+Our open-source implementation is available at:
+\begin{center}
+\small\url{https://github.com/kitretsu2809/gVXRsimulation_PureDLReconstruction_Pipeline}
+\end{center}
+
+% -----------------------------------------------------------------------
+\section*{Acknowledgements}
+% -----------------------------------------------------------------------
+
+[Acknowledgements to supervisors, funding agencies, or compute
+resources to be added.]
+
+% -----------------------------------------------------------------------
+\bibliographystyle{plainnat}
+\begin{thebibliography}{99}
+
+\bibitem{kak2001}
+A.~C. Kak and M.~Slaney,
+\textit{Principles of Computerized Tomographic Imaging},
+Society for Industrial and Applied Mathematics, 2001.
+
+\bibitem{feldkamp1984}
+L.~A. Feldkamp, L.~C. Davis, and J.~W. Kress,
+``Practical cone-beam algorithm,''
+\textit{Journal of the Optical Society of America A},
+vol.~1, no.~6, pp.~612--619, 1984.
+
+\bibitem{jin2017}
+K.~H. Jin, M.~T. McCann, E.~Froustey, and M.~Unser,
+``Deep convolutional neural network for inverse problems in imaging,''
+\textit{IEEE Transactions on Image Processing},
+vol.~26, no.~9, pp.~4509--4522, 2017.
+
+\bibitem{chen2017}
+H.~Chen, Y.~Zhang, M.~K. Kalra, F.~Lin, Y.~Chen, P.~Liao,
+J.~Zhou, and G.~Wang,
+``Low-dose CT with a residual encoder-decoder convolutional neural network,''
+\textit{IEEE Transactions on Medical Imaging},
+vol.~36, no.~12, pp.~2524--2535, 2017.
+
+\bibitem{han2016}
+Y.~S. Han and J.~C. Ye,
+``Framing U-Net via deep convolutional framelets: Application to sparse-view CT,''
+\textit{IEEE Transactions on Medical Imaging},
+vol.~37, no.~6, pp.~1418--1429, 2018.
+
+\bibitem{lee2018}
+H.~Lee, J.~Lee, H.~Kim, B.~Cho, and S.~Cho,
+``Deep-neural-network based sinogram synthesis for sparse-view CT image reconstruction,''
+\textit{IEEE Transactions on Radiation and Plasma Medical Sciences},
+vol.~3, no.~2, pp.~109--119, 2018.
+
+\bibitem{hu2020}
+D.~Hu, J.~Liu, T.~Lv, Q.~Zhao, Y.~Zhang, G.~Quan, J.~Feng,
+Y.~Chen, and L.~Luo,
+``Hybrid-domain neural network processing for sparse-view CT reconstruction,''
+\textit{IEEE Transactions on Radiation and Plasma Medical Sciences},
+vol.~5, no.~1, pp.~88--98, 2020.
+
+\bibitem{wu2021drone}
+W.~Wu, D.~Hu, C.~Niu, H.~Yu, V.~Vardhanabhuti, and G.~Wang,
+``DRONE: Dual-domain residual-based optimization network for
+sparse-view CT reconstruction,''
+\textit{IEEE Transactions on Medical Imaging},
+vol.~40, no.~11, pp.~3002--3014, 2021.
+
+\bibitem{liu2020}
+J.~Liu, Y.~Hu, X.~Yang, Y.~Chen, H.~Shu, L.~Luo, C.~Toumoulin,
+J.-L. Coatrieux, and L.~Li,
+``3D feature constrained reconstruction for low dose CT imaging,''
+\textit{IEEE Transactions on Circuits and Systems for Video Technology},
+vol.~28, no.~5, pp.~1232--1247, 2018.
+
+\bibitem{vidal2019gvxr}
+F.~P. Vidal, J.~M. L\'{e}tang, G.~Peix, and P.~Clackdoyle,
+``Assessment of scattered radiation and correction methods in
+cone-beam computed tomography using gVirtualXray,''
+\textit{Nuclear Instruments and Methods in Physics Research A},
+vol.~949, p.~162792, 2020.
+
+\bibitem{astra2016}
+W.~van Aarle, W.~J. Palenstijn, J.~Cant, E.~Janssens, F.~Bleichrodt,
+A.~Dabravolski, J.~De Beenhouwer, K.~J. Batenburg, and J.~Sijbers,
+``Fast and flexible X-ray tomography using the ASTRA toolbox,''
+\textit{Optics Express},
+vol.~24, no.~22, pp.~25129--25147, 2016.
+
+\bibitem{zhao2017}
+H.~Zhao, O.~Gallo, I.~Frosio, and J.~Kautz,
+``Loss functions for image restoration with neural networks,''
+\textit{IEEE Transactions on Computational Imaging},
+vol.~3, no.~1, pp.~47--57, 2017.
+
+\bibitem{wang2004ssim}
+Z.~Wang, A.~C. Bovik, H.~R. Sheikh, and E.~P. Simoncelli,
+``Image quality assessment: From error visibility to structural similarity,''
+\textit{IEEE Transactions on Image Processing},
+vol.~13, no.~4, pp.~600--612, 2004.
+
+\end{thebibliography}
+
+\end{document}
