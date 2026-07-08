@@ -17,13 +17,6 @@ if DATA_DIR.exists():
         if d.is_dir() and (d / "settings.cto").exists():
             SAMPLE_DIRS[d.name] = d
 
-# Add backward compatibility for old local data directory just in case
-LOCAL_DATA = REPO_ROOT / "data"
-if LOCAL_DATA.exists():
-    for d in LOCAL_DATA.iterdir():
-        if d.is_dir() and (d / "settings.cto").exists() and d.name not in SAMPLE_DIRS:
-            SAMPLE_DIRS[d.name] = d
-
 SAMPLE_DIR = list(SAMPLE_DIRS.values())[0] if SAMPLE_DIRS else None
 
 def set_sample(sample_name: str) -> None:

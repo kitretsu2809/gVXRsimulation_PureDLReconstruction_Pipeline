@@ -37,8 +37,14 @@ def convert_to_attenuation(projections: np.ndarray, scales_path: Path | None = N
         scales = np.load(scales_path)
         # scales has shape (num_projections,)
         # projections has shape (num_projections, rows, cols)
-        scales = scales.reshape(-1, 1, 1)
-        return (projections / 65535.0) * scales
+        if scales.shape[0] == projections.shape[0]:
+            scales = scales.reshape(-1, 1, 1)
+            return (projections / 65535.0) * scales
+        else:
+            print(
+                f"WARNING: sino_scales.npy has {scales.shape[0]} entries but projections "
+                f"has {projections.shape[0]} — falling back to air-percentile normalization."
+            )
         
     # Otherwise, these are raw transmission intensities
     air_level = np.percentile(projections, air_percentile, axis=(1, 2), keepdims=True).astype(np.float32)
@@ -211,9 +217,10 @@ def reconstruct_volume_from_projection_dataset(
         astra.data3d.delete(vol_id)
         astra.data3d.delete(proj_id)
 
-    # Calculate effective downsample ratio for the Z-crop
-    total_ratio = geometry.detector_cols / detector_cols
-    cropped, (zmin_ds, zmax_ds) = crop_valid_z(reconstructed, geometry.zmin, geometry.zmax, total_ratio)
+    # Use the explicit integer downsample_factor for Z-crop (semantically correct; total_ratio
+    # equals downsample_factor numerically only when rows and cols are scaled equally, but
+    # passing the float caused subtle rounding and would break with asymmetric downsampling).
+    cropped, (zmin_ds, zmax_ds) = crop_valid_z(reconstructed, geometry.zmin, geometry.zmax, downsample_factor)
     
     info: dict[str, float | int | tuple[int, ...]] = {
         "input_projections": int(dataset.projections.shape[0]),

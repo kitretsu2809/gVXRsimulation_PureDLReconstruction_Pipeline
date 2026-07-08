@@ -14,6 +14,7 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description="Batch processing orchestrator for Pure DL datasets.")
     parser.add_argument("--sparse-step", type=int, default=1, help="Downsample factor for projections. 1 = All data, >1 = Sparse View.")
+    parser.add_argument("--downsample", type=int, default=2, help="Spatial downsampling factor for detector rows/cols (default: 2).")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -55,6 +56,7 @@ def main():
             cmd = [
                 sys.executable, str(fdk_script),
                 "--sample-dir", str(dataset_path),
+                "--downsample", str(args.downsample),
                 "--output-dir", str(fdk_out_dir)
             ]
             subprocess.run(cmd, check=True)
@@ -71,6 +73,7 @@ def main():
                 "--sample-dir", str(dataset_path),
                 "--target-volume", str(fdk_vol_path),
                 "--image-size", "1024",
+                "--downsample-factor", str(args.downsample),
                 "--output-path", str(npz_out_path),
                 "--sparse-step", str(args.sparse_step)
             ]

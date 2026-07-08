@@ -94,7 +94,7 @@ def add_gaussian_noise(
     rng = np.random.default_rng(seed)
     sigma = float(np.mean(projections) * sigma_fraction)
     noisy = projections.astype(np.float32, copy=False) + rng.normal(0.0, sigma, size=projections.shape).astype(np.float32)
-    return np.clip(noisy, 1.0, None)
+    return np.clip(noisy, 0.0, None)
 
 
 def add_poisson_noise(

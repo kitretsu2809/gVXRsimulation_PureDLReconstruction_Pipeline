@@ -65,7 +65,13 @@ def main():
     target_volume = tifffile.imread(target_volume_path).astype(np.float32)
 
     projections_ds = downsample_projection_stack(sample.projections, args.downsample_factor)
-    attenuation = convert_to_attenuation(projections_ds)
+    # Use sino_scales.npy if present so attenuation normalization matches the FDK ground-truth (Bug 3 fix)
+    scales_path = sample_dir / "sino_scales.npy"
+    if scales_path.exists():
+        print(f"Using pre-calibrated sino_scales.npy from {scales_path}")
+    else:
+        print("sino_scales.npy not found — falling back to air-percentile normalization")
+    attenuation = convert_to_attenuation(projections_ds, scales_path=scales_path)
 
     dense_angle_count = int(attenuation.shape[0])
     sparse_indices = np.arange(0, dense_angle_count, args.sparse_step, dtype=np.int32)

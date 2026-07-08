@@ -15,6 +15,7 @@ class CTGeometry:
     settings_path: Path
     projections: int
     angle_range_deg: float
+    start_angle_deg: float
     angles_deg: np.ndarray
     angles_rad: np.ndarray
     detector_rows: int
@@ -49,7 +50,8 @@ def parse_geometry(settings_path: str | Path) -> CTGeometry:
     angle_range_deg = float(_require(scan, "angle range"))
     direction = int(_require(recon, "direction"))
 
-    start_angle_deg = 0.0
+    # Read start angle from CTO if present, else default to 0
+    start_angle_deg = float(recon.get("start angle", scan.get("start angle", 0.0)))
     stop_angle_deg = start_angle_deg + direction * angle_range_deg
     angles_deg = np.linspace(start_angle_deg, stop_angle_deg, projections, endpoint=False, dtype=np.float32)
     angles_rad = np.deg2rad(angles_deg).astype(np.float32)
@@ -62,6 +64,7 @@ def parse_geometry(settings_path: str | Path) -> CTGeometry:
         settings_path=settings_path,
         projections=projections,
         angle_range_deg=angle_range_deg,
+        start_angle_deg=start_angle_deg,
         angles_deg=angles_deg,
         angles_rad=angles_rad,
         detector_rows=detector_rows,
@@ -83,7 +86,8 @@ def geometry_for_projection_count(geometry: CTGeometry, projection_count: int) -
     if projection_count <= 0:
         raise ValueError("projection_count must be positive")
 
-    start_angle_deg = 0.0
+    # Use the start angle stored in the geometry (read from CTO) instead of hardcoding 0
+    start_angle_deg = geometry.start_angle_deg
     stop_angle_deg = start_angle_deg + geometry.direction * geometry.angle_range_deg
     angles_deg = np.linspace(
         start_angle_deg,
