@@ -24,7 +24,12 @@ INFER_SCRIPT = REPO_ROOT / "scripts" / "pure_dl" / "03_inference.py"
 CONDA_ENV  = "ct_pipeline"
 
 def conda_python():
-    return ["conda", "run", "-n", CONDA_ENV, "python"]
+    import shutil
+    conda_base = Path(shutil.which("conda")).parents[1]
+    env_python = conda_base / "envs" / CONDA_ENV / "bin" / "python"
+    if env_python.exists():
+        return [str(env_python), "-u"]
+    return ["python", "-u"]
 
 
 class App:
@@ -310,12 +315,15 @@ class App:
 
         def worker():
             try:
+                env = os.environ.copy()
+                env["PYTHONUNBUFFERED"] = "1"
                 self.proc = subprocess.Popen(
                     [str(c) for c in cmd],
                     cwd=str(REPO_ROOT),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True
+                    text=True,
+                    env=env
                 )
                 
                 # Make stdout non-blocking to prevent UI hang when process ends
