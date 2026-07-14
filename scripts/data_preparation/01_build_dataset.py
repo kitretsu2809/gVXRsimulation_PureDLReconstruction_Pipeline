@@ -134,7 +134,12 @@ def main():
         settings_path=str(sample_dir / "settings.cto"),
     )
 
-    np.savez_compressed(
+    # Save UNCOMPRESSED so the loader can use mmap_mode='r'.
+    # mmap keeps the arrays on disk and reads only the current batch into RAM,
+    # reducing training RAM usage from GBs (all data) to MBs (one batch).
+    # Files are slightly larger than compressed, but the sequential pipeline
+    # deletes them after training anyway so disk space is not a concern.
+    np.savez(
         output_path,
         input_sinograms=np.stack(input_sinograms, axis=0).astype(np.float32),
         target_sinograms=np.stack(target_sinograms, axis=0).astype(np.float32),

@@ -43,9 +43,19 @@ def main():
             import torch.nn.functional as F
             
             sample_idx = self.indices[index]
-            noisy_sinogram = torch.from_numpy(self.input_sinograms[sample_idx][None, :, :])
-            target_sinogram = torch.from_numpy(self.target_sinograms[sample_idx][None, :, :])
-            target_image = torch.from_numpy(self.target_images[sample_idx][None, :, :])
+            # np.ascontiguousarray copies ONE sample from the mmap'd array into RAM
+            # as a small contiguous float32 block. This is the only moment data
+            # physically moves from disk to RAM — one sample at a time, not the
+            # whole file. (~1 MB per sample vs potentially GBs for the full array)
+            noisy_sinogram  = torch.from_numpy(
+                np.ascontiguousarray(self.input_sinograms[sample_idx],  dtype=np.float32)
+            ).unsqueeze(0)   # add channel dim: (H, W) -> (1, H, W)
+            target_sinogram = torch.from_numpy(
+                np.ascontiguousarray(self.target_sinograms[sample_idx], dtype=np.float32)
+            ).unsqueeze(0)
+            target_image    = torch.from_numpy(
+                np.ascontiguousarray(self.target_images[sample_idx],    dtype=np.float32)
+            ).unsqueeze(0)
             
             # Interpolate the sparse sinogram to the dense shape so the network can repair it
             if noisy_sinogram.shape != target_sinogram.shape:
