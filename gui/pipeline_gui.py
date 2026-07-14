@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import threading
+import shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
