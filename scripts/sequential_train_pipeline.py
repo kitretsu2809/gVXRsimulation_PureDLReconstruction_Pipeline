@@ -9,8 +9,9 @@ For each STL it:
   2. Runs classical FDK reconstruction to get the reference CT volume
   3. Builds a .npz training dataset
   4. Trains (or resumes) the Pure DL model with an auto-decayed learning rate
-  5. DELETES all generated data for that STL (projections, FDK volume, .npz)
-  6. Saves pipeline state so new STLs can be added and training resumed later
+  5. Runs DL inference to produce a reconstructed 3D volume (kept as output)
+  6. DELETES all generated data for that STL (projections, FDK volume, .npz)
+  7. Saves pipeline state so new STLs can be added and training resumed later
 
 Usage
 -----
@@ -25,6 +26,9 @@ Usage
 
   # Override epochs or scan method:
   python scripts/sequential_train_pipeline.py --epochs 10 --scan-method centered
+
+  # Quick local test (1 STL, 1 material, 2 epochs — finishes in minutes):
+  python scripts/sequential_train_pipeline.py --quick-test
 """
 from __future__ import annotations
 
@@ -84,10 +88,11 @@ MATERIAL_VARIATIONS = [
 ]
 
 # Script paths (relative to repo root)
-_GVXR_SCRIPT  = REPO_ROOT / "DATACREATION"   / "gvxr_projection_script.py"
-_FDK_SCRIPT   = REPO_ROOT / "scripts" / "classical_reconstruction" / "reconstruct_fdk.py"
-_BUILD_SCRIPT = REPO_ROOT / "scripts" / "data_preparation"         / "01_build_dataset.py"
-_TRAIN_SCRIPT = REPO_ROOT / "scripts" / "pure_dl"                  / "02_train_pure_dl.py"
+_GVXR_SCRIPT      = REPO_ROOT / "DATACREATION"   / "gvxr_projection_script.py"
+_FDK_SCRIPT       = REPO_ROOT / "scripts" / "classical_reconstruction" / "reconstruct_fdk.py"
+_BUILD_SCRIPT     = REPO_ROOT / "scripts" / "data_preparation"         / "01_build_dataset.py"
+_TRAIN_SCRIPT     = REPO_ROOT / "scripts" / "pure_dl"                  / "02_train_pure_dl.py"
+_INFERENCE_SCRIPT = REPO_ROOT / "scripts" / "pure_dl"                  / "03_inference.py"
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +209,22 @@ def main() -> None:
         action="store_true",
         help="Print every step without running anything — useful for testing on lab computer before committing real compute.",
     )
+    parser.add_argument(
+        "--quick-test",
+        action="store_true",
+        help="Run a fast end-to-end test: uses only the first STL, only the Ti_standard "
+             "material variation, and 2 training epochs. Finishes in minutes. "
+             "Use this to verify the full pipeline works before a real run.",
+    )
     args = parser.parse_args()
+
+    # --quick-test overrides: 1 STL, 1 material, 2 epochs
+    if args.quick_test:
+        print("\n⚡  QUICK-TEST MODE: 1 STL · Ti_standard only · 2 epochs")
+        args.epochs = 2
+        material_variations = [MATERIAL_VARIATIONS[0]]  # Ti_standard only
+    else:
+        material_variations = MATERIAL_VARIATIONS
 
     stl_dir = Path(args.stl_dir)
     all_stls = sorted(stl_dir.glob("*.stl"))
@@ -246,14 +266,16 @@ def main() -> None:
         print(f"#  Round {round_idx + 1}   |   Learning Rate: {lr:.2e}   |   Epochs: {args.epochs}")
         print(f"{'#'*62}")
 
-        dirs_to_delete  = []   # collected during this round, deleted at the end
+        dirs_to_delete  = []   # collected during this round, deleted at end
         files_to_delete = []
         npz_files       = []
+        # Track first variation's data dir for inference (we use Ti_standard as reference)
+        inference_sample_dir = None
 
         # ----------------------------------------------------------------
         # Step 1 + 2 + 3  (per material variation)
         # ----------------------------------------------------------------
-        for var in MATERIAL_VARIATIONS:
+        for var in material_variations:
             tag          = var["suffix"]
             dataset_name = f"{stl_name}_{tag}"
             out_dir      = data_dir / dataset_name
@@ -275,6 +297,9 @@ def main() -> None:
             # gVXR script appends _<scan_method> to the output dir
             actual_data_dir = Path(f"{out_dir}_{args.scan_method}")
             dirs_to_delete.append(actual_data_dir)
+            # Use the first variation as the inference reference sample
+            if inference_sample_dir is None:
+                inference_sample_dir = actual_data_dir
 
             # ---- 2. FDK reconstruction (reference volume) ----
             fdk_out_dir  = OUTPUTS_DIR / f"fdk_{stl_name}_{tag}"
@@ -346,7 +371,36 @@ def main() -> None:
         )
 
         # ----------------------------------------------------------------
-        # Step 5 — Cleanup: delete all data generated for this STL
+        # Step 5 — Inference: reconstruct a 3D volume with the freshly
+        #           trained model. Uses Ti_standard projection data as input.
+        #           Output is KEPT (not deleted) — it's the final result.
+        # ----------------------------------------------------------------
+        best_ckpt = OUTPUTS_DIR / "pure_dl_training_centered" / "best_model_centered.pt"
+        dl_recon_dir  = OUTPUTS_DIR / f"dl_reconstruction_{stl_name}"
+        dl_recon_path = dl_recon_dir / "dl_volume.tif"
+        if not args.dry_run:
+            dl_recon_dir.mkdir(parents=True, exist_ok=True)
+        if inference_sample_dir is not None:
+            run_step(
+                [
+                    sys.executable, _INFERENCE_SCRIPT,
+                    "--model-path",  best_ckpt,
+                    "--sample-dir",  inference_sample_dir,
+                    "--output-path", dl_recon_path,
+                    "--batch-size",  8,
+                ],
+                dry_run=args.dry_run,
+                label=f"[{stl_name}] DL Inference → {dl_recon_path}",
+            )
+            if not args.dry_run and dl_recon_path.exists():
+                print(f"   📦  Reconstruction saved: {dl_recon_path}")
+        else:
+            print(f"   [WARN] No inference_sample_dir found — skipping inference for {stl_name}")
+
+        # ----------------------------------------------------------------
+        # Step 6 — Cleanup: delete all data generated for this STL.
+        # NOTE: dl_recon_dir is intentionally NOT in dirs_to_delete —
+        #       the reconstructed volume is the final output and must be kept.
         # ----------------------------------------------------------------
         print(f"\n{'─'*62}")
         print(f"  🧹  Cleaning up data for {stl_name} ...")
@@ -356,7 +410,7 @@ def main() -> None:
             delete_file(f, args.dry_run)
 
         # ----------------------------------------------------------------
-        # Step 6 — Save state
+        # Step 7 — Save state
         # ----------------------------------------------------------------
         best_ckpt = OUTPUTS_DIR / "pure_dl_training_centered" / "best_model_centered.pt"
         state["completed_stls"].append(stl_path.name)
