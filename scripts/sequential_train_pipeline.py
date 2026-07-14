@@ -436,6 +436,7 @@ def main() -> None:
         # ----------------------------------------------------------------
         # Step 7 — Save state
         # ----------------------------------------------------------------
+        best_ckpt = OUTPUTS_DIR / "pure_dl_training_centered" / "best_model_centered.pt"
         state["completed_stls"].append(stl_path.name)
         state["round"]           = round_idx + 1
         state["last_lr"]         = lr
