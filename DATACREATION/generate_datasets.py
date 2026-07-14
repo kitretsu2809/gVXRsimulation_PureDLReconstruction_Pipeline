@@ -21,33 +21,30 @@ def generate_datasets():
         
     print(f"Found {len(stl_files)} STL files: {stl_files}")
     
-    # Define our dataset variations
+    # Dataset variations — covers a wide range of densities and noise levels
+    # so the trained model generalises to many real-world materials.
+    # gVXR uses real NIST X-ray attenuation coefficients per element, so
+    # changing the element string automatically gives physically correct contrast.
     variations = [
-        {
-            "suffix": "standard",
-            "material": "Ti",
-            "i0": 50000.0,
-            "gaussian_std": 10.0,
-        },
-        {
-            "suffix": "dense_high_noise",
-            "material": "Ti",
-            "i0": 10000.0,
-            "gaussian_std": 20.0,
-        },
-        {
-            "suffix": "perfect_no_noise",
-            "material": "Ti",
-            "i0": 50000.0, # ignored practically when we want no noise, but handled in gvxr via clipping? Wait, gvxr script always applies noise. 
-            "gaussian_std": 0.0,
-        },
-        {
-            "suffix": "aluminum_low_density",
-            "material": "Al",
-            "i0": 50000.0,
-            "gaussian_std": 10.0,
-        }
-        # Add hundreds more variations here as needed!
+        # ---- Standard reference (Titanium, 4.51 g/cm³) ----
+        {"suffix": "Ti_standard",      "material": "Ti", "i0": 50000.0, "gaussian_std": 10.0},
+
+        # ---- Lightweight metals ----
+        {"suffix": "Mg_lightweight",   "material": "Mg", "i0": 50000.0, "gaussian_std": 10.0},  # Magnesium  1.74 g/cm³  — aerospace
+        {"suffix": "Al_low_density",   "material": "Al", "i0": 50000.0, "gaussian_std": 10.0},  # Aluminium  2.70 g/cm³  — structural
+
+        # ---- Medium-density structural metals ----
+        {"suffix": "Fe_iron",          "material": "Fe", "i0": 50000.0, "gaussian_std": 10.0},  # Iron       7.87 g/cm³  — steel
+        {"suffix": "Ni_nickel",        "material": "Ni", "i0": 50000.0, "gaussian_std": 10.0},  # Nickel     8.90 g/cm³  — superalloys
+        {"suffix": "Cu_copper",        "material": "Cu", "i0": 50000.0, "gaussian_std": 10.0},  # Copper     8.96 g/cm³  — electronics/pipes
+
+        # ---- High-density metals ----
+        {"suffix": "Pb_lead",          "material": "Pb", "i0": 50000.0, "gaussian_std": 10.0},  # Lead      11.34 g/cm³  — shielding
+        {"suffix": "W_tungsten",       "material": "W",  "i0": 50000.0, "gaussian_std": 10.0},  # Tungsten  19.30 g/cm³  — hardmetals/tooling
+
+        # ---- Noise stress tests (Titanium base) ----
+        {"suffix": "Ti_high_noise",    "material": "Ti", "i0": 10000.0, "gaussian_std": 20.0},  # Low photon count — noisy detector
+        {"suffix": "Ti_no_noise",      "material": "Ti", "i0": 50000.0, "gaussian_std":  0.0},  # Perfect reference — no noise
     ]
     
     for stl_path in stl_files:
