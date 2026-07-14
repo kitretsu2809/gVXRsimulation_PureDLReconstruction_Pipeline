@@ -141,6 +141,12 @@ class App:
         self.infer_batch = tk.StringVar(value="8")
         tk.Entry(row_inf, textvariable=self.infer_batch, width=6).pack(side=tk.LEFT)
 
+        # Frame 3: Main Batch Info
+        self.main_info_frame = tk.Frame(self.dynamic_frame)
+        tk.Label(self.main_info_frame, text="Main Batch Pipeline Configuration", font=("TkDefaultFont", 9, "bold"), anchor="w").pack(fill=tk.X, pady=(8, 0))
+        ttk.Separator(self.main_info_frame).pack(fill=tk.X)
+        tk.Label(self.main_info_frame, text="The Main Batch Pipeline executes the hardcoded run_full_pipeline.sh bash script.\n\nIt processes all datasets at once and does not accept custom arguments like epochs or batch size.", fg="gray", justify=tk.LEFT, wraplength=300).pack(pady=10, fill=tk.X)
+
         # ---- STL Status ----
         self.stl_section = tk.Frame(parent)
         tk.Label(self.stl_section, text="STL Status", font=("TkDefaultFont", 9, "bold"), anchor="w").pack(fill=tk.X, pady=(8, 0))
@@ -200,16 +206,22 @@ class App:
     # ------------------------------------------------------------------
     def _toggle_ui(self):
         m = self.mode.get()
+        
+        # Hide everything first
+        self.train_frame.pack_forget()
+        self.infer_frame.pack_forget()
+        self.main_info_frame.pack_forget()
+        self.stl_section.pack_forget()
+        self.state_section.pack_forget()
+        
         if m == "inference":
-            self.train_frame.pack_forget()
-            self.stl_section.pack_forget()
-            self.state_section.pack_forget()
             self.infer_frame.pack(fill=tk.X)
-        else:
-            self.infer_frame.pack_forget()
+        elif m == "sequential":
             self.train_frame.pack(fill=tk.X)
             self.stl_section.pack(fill=tk.X)
             self.state_section.pack(fill=tk.X)
+        elif m == "main":
+            self.main_info_frame.pack(fill=tk.X, pady=10)
 
     # ------------------------------------------------------------------
     # File Pickers for Inference
