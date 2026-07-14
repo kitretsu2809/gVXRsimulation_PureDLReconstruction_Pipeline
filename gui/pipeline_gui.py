@@ -24,12 +24,14 @@ INFER_SCRIPT = REPO_ROOT / "scripts" / "pure_dl" / "03_inference.py"
 CONDA_ENV  = "ct_pipeline"
 
 def conda_python():
-    import shutil
-    conda_base = Path(shutil.which("conda")).parents[1]
-    env_python = conda_base / "envs" / CONDA_ENV / "bin" / "python"
-    if env_python.exists():
-        return [str(env_python), "-u"]
-    return ["python", "-u"]
+    # Use bash to properly activate the conda environment (setting LD_LIBRARY_PATH for GLEW/gVXR)
+    # and then exec python -u to ensure real-time unbuffered logs.
+    # The "$@" passes all subsequent list arguments to python.
+    return [
+        "bash", "-c",
+        f'source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate {CONDA_ENV} && exec python -u "$@"',
+        "--"
+    ]
 
 
 class App:
