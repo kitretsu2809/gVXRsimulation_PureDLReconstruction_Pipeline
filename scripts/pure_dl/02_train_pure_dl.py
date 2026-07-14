@@ -64,9 +64,12 @@ def main():
     parser.add_argument("--scan-method", type=str, choices=['centered', 'offset'], default='centered', help="Scan geometry type to train on.")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=2) # Dual-domain uses more memory
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate. Use a smaller value (e.g. 1e-4) when resuming.")
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--resume-checkpoint", type=str, default=None,
+                        help="Path to a previously saved .pt checkpoint to resume training from. "
+                             "Example: outputs/pure_dl_training_centered/best_model_centered.pt")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -139,6 +142,23 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     l1_loss = nn.L1Loss()
 
+    # --- Resume from checkpoint if requested ---
+    start_epoch = 1
+    if args.resume_checkpoint is not None:
+        ckpt_path = resolve_repo_path(args.resume_checkpoint)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Resume checkpoint not found: {ckpt_path}")
+        print(f"Resuming from checkpoint: {ckpt_path}")
+        checkpoint = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        # Restore best val loss so the model only gets overwritten if it genuinely improves
+        prev_history = checkpoint.get("history", {})
+        prev_logs = prev_history.get("epoch_logs", [])
+        if prev_logs:
+            best_val_loss = min(log["val_loss"] for log in prev_logs)
+            print(f"Restored best_val_loss from checkpoint: {best_val_loss:.6f}")
+        print(f"Checkpoint was saved at epoch {checkpoint.get('epoch', '?')}. Starting fresh epoch counter.")
+
     output_dir = resolve_repo_path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     best_checkpoint = output_dir / f"best_model_{args.scan_method}.pt"
@@ -158,7 +178,8 @@ def main():
         "epoch_logs": [],
     }
 
-    best_val_loss = float("inf")
+    if args.resume_checkpoint is None:
+        best_val_loss = float("inf")
     for epoch in range(1, args.epochs + 1):
         model.train()
         train_losses = []
