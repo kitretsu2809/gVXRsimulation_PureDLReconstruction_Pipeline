@@ -29,6 +29,12 @@ Usage
 
   # Quick local test (1 STL, 1 material, 2 epochs — finishes in minutes):
   python scripts/sequential_train_pipeline.py --quick-test
+
+  # Training only (fast) — run inference manually later when needed:
+  python scripts/sequential_train_pipeline.py
+
+  # Training + inference after each STL (slower, but saves a reconstruction):
+  python scripts/sequential_train_pipeline.py --run-inference
 """
 from __future__ import annotations
 
@@ -205,6 +211,14 @@ def main() -> None:
         help="Fraction of slices to use for validation (default: 0.2)",
     )
     parser.add_argument(
+        "--run-inference",
+        action="store_true",
+        help="After training each STL, run DL inference to produce a 3D reconstruction volume "
+             "BEFORE deleting the projection data. Off by default to keep training fast. "
+             "Output always overwrites outputs/dl_reconstruction/dl_volume.tif (no disk accumulation). "
+             "INPUT: Ti_standard projection data of the current STL (the only data available before cleanup).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print every step without running anything — useful for testing on lab computer before committing real compute.",
@@ -371,36 +385,46 @@ def main() -> None:
         )
 
         # ----------------------------------------------------------------
-        # Step 5 — Inference: reconstruct a 3D volume with the freshly
-        #           trained model. Uses Ti_standard projection data as input.
-        #           Output is KEPT (not deleted) — it's the final result.
+        # Step 5 — Inference (OPTIONAL — only runs if --run-inference is set)
+        # Inference input: Ti_standard projection data of the current STL.
+        # This is the only projection data available at this point (before
+        # cleanup). It runs BEFORE cleanup so the data still exists.
+        # Output: outputs/dl_reconstruction/dl_volume.tif
+        # Always OVERWRITES the same single file — no disk accumulation.
+        # To keep training fast, skip this and run inference manually later.
         # ----------------------------------------------------------------
-        best_ckpt = OUTPUTS_DIR / "pure_dl_training_centered" / "best_model_centered.pt"
-        dl_recon_dir  = OUTPUTS_DIR / f"dl_reconstruction_{stl_name}"
-        dl_recon_path = dl_recon_dir / "dl_volume.tif"
-        if not args.dry_run:
-            dl_recon_dir.mkdir(parents=True, exist_ok=True)
-        if inference_sample_dir is not None:
-            run_step(
-                [
-                    sys.executable, _INFERENCE_SCRIPT,
-                    "--model-path",  best_ckpt,
-                    "--sample-dir",  inference_sample_dir,
-                    "--output-path", dl_recon_path,
-                    "--batch-size",  8,
-                ],
-                dry_run=args.dry_run,
-                label=f"[{stl_name}] DL Inference → {dl_recon_path}",
-            )
-            if not args.dry_run and dl_recon_path.exists():
-                print(f"   📦  Reconstruction saved: {dl_recon_path}")
+        if args.run_inference:
+            best_ckpt     = OUTPUTS_DIR / "pure_dl_training_centered" / "best_model_centered.pt"
+            dl_recon_dir  = OUTPUTS_DIR / "dl_reconstruction"
+            dl_recon_path = dl_recon_dir / "dl_volume.tif"
+            if not args.dry_run:
+                dl_recon_dir.mkdir(parents=True, exist_ok=True)
+                # Delete old reconstruction before writing new one
+                if dl_recon_path.exists():
+                    dl_recon_path.unlink()
+                    print(f"   🗑  Deleted old reconstruction: {dl_recon_path}")
+            if inference_sample_dir is not None:
+                run_step(
+                    [
+                        sys.executable, _INFERENCE_SCRIPT,
+                        "--model-path",  best_ckpt,
+                        "--sample-dir",  inference_sample_dir,
+                        "--output-path", dl_recon_path,
+                        "--batch-size",  8,
+                    ],
+                    dry_run=args.dry_run,
+                    label=f"[{stl_name}] DL Inference → {dl_recon_path}  (input: Ti_standard projections)",
+                )
+                if not args.dry_run and dl_recon_path.exists():
+                    print(f"   📦  Reconstruction saved (overwrote previous): {dl_recon_path}")
+            else:
+                print(f"   [WARN] No inference_sample_dir found — skipping inference for {stl_name}")
         else:
-            print(f"   [WARN] No inference_sample_dir found — skipping inference for {stl_name}")
+            print(f"\n   ℹ️  Inference skipped (use --run-inference to enable). "
+                  f"To run inference manually later, regenerate projections first.")
 
         # ----------------------------------------------------------------
-        # Step 6 — Cleanup: delete all data generated for this STL.
-        # NOTE: dl_recon_dir is intentionally NOT in dirs_to_delete —
-        #       the reconstructed volume is the final output and must be kept.
+        # Step 6 — Cleanup: delete all generated data for this STL
         # ----------------------------------------------------------------
         print(f"\n{'─'*62}")
         print(f"  🧹  Cleaning up data for {stl_name} ...")
@@ -412,7 +436,6 @@ def main() -> None:
         # ----------------------------------------------------------------
         # Step 7 — Save state
         # ----------------------------------------------------------------
-        best_ckpt = OUTPUTS_DIR / "pure_dl_training_centered" / "best_model_centered.pt"
         state["completed_stls"].append(stl_path.name)
         state["round"]           = round_idx + 1
         state["last_lr"]         = lr
