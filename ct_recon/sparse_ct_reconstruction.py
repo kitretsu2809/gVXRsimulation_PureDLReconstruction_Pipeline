@@ -61,12 +61,22 @@ def resize_2d_array(image: np.ndarray, output_shape: tuple[int, int]) -> np.ndar
 
 def load_sparse_dataset(dataset_path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, SparseSinogramDatasetMetadata]:
     dataset_path = Path(dataset_path)
-    payload = np.load(dataset_path)
+    # mmap_mode='r' keeps arrays on disk — only the slices actually accessed
+    # are loaded into RAM (per sample in __getitem__), not the whole file.
+    # Requires the .npz to be saved with np.savez (uncompressed). Falls back
+    # gracefully to a normal load if the file is compressed.
+    try:
+        payload = np.load(dataset_path, mmap_mode='r')
+    except ValueError:
+        # Compressed npz does not support mmap — load normally (higher RAM usage)
+        payload = np.load(dataset_path)
     metadata = SparseSinogramDatasetMetadata(**json.loads(payload["metadata_json"].item()))
+    # Return the raw mmap'd arrays — do NOT call .astype() here because that
+    # would copy the entire array into RAM, defeating the purpose of mmap.
     return (
-        payload["input_sinograms"].astype(np.float32),
-        payload["target_sinograms"].astype(np.float32),
-        payload["target_images"].astype(np.float32),
+        payload["input_sinograms"],
+        payload["target_sinograms"],
+        payload["target_images"],
         metadata,
     )
 
