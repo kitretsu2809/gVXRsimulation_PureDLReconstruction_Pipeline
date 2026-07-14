@@ -163,7 +163,8 @@ def main():
         model.train()
         train_losses = []
 
-        for noisy_sino, target_sino, target_image in train_loader:
+        # Enumerate train_loader to log batch-level progress
+        for batch_idx, (noisy_sino, target_sino, target_image) in enumerate(train_loader):
             noisy_sino = noisy_sino.to(device)
             target_sino = target_sino.to(device)
             target_image = target_image.to(device)
@@ -179,6 +180,13 @@ def main():
             total_loss.backward()
             optimizer.step()
             train_losses.append(float(total_loss.item()))
+            
+            # Print batch-level progress immediately
+            print(
+                f"Epoch {epoch}/{args.epochs} | Batch {batch_idx + 1}/{len(train_loader)} | Loss: {total_loss.item():.4f}",
+                end="\r",
+                flush=True,
+            )
 
         model.eval()
         val_losses = []
@@ -237,8 +245,11 @@ def main():
                 best_checkpoint,
             )
 
+        # Clear the carriage return line and print the final epoch status
+        print(" " * 80, end="\r")
         print(
-            f"epoch={epoch} train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_psnr={val_psnr:.3f}dB"
+            f"Epoch {epoch}/{args.epochs} | train_loss={train_loss:.6f} | val_loss={val_loss:.6f} | val_psnr={val_psnr:.3f}dB",
+            flush=True,
         )
 
 

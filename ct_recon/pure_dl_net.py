@@ -26,7 +26,9 @@ class SinogramUNet(nn.Module):
         super().__init__()
         self.inc = DoubleConv(1, channels)
         self.down = DoubleConv(channels, channels * 2)
-        self.up = DoubleConv(channels * 2, channels)
+        # Skip connection concatenates x_up (channels * 2) and x1 (channels),
+        # resulting in channels * 3 input channels for the up block.
+        self.up = DoubleConv(channels * 3, channels)
         self.outc = nn.Conv2d(channels, 1, kernel_size=1)
 
     def forward(self, x):
@@ -37,7 +39,8 @@ class SinogramUNet(nn.Module):
         diffY = x1.size()[2] - x_up.size()[2]
         diffX = x1.size()[3] - x_up.size()[3]
         x_up = F.pad(x_up, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
-        x3 = self.up(x_up + x1)
+        # Concatenate skip connection along the channel dimension
+        x3 = self.up(torch.cat([x_up, x1], dim=1))
         return self.outc(x3) + x
 
 class ConvolutionalDomainTransform(nn.Module):
@@ -65,8 +68,10 @@ class ConvolutionalDomainTransform(nn.Module):
             nn.ReLU(inplace=True),
         )
         
-        self.decoder2 = DoubleConv(channels * 4, channels * 2)
-        self.decoder1 = DoubleConv(channels * 2, channels)
+        # Decoder 2 concatenates x_up2 (channels * 4) and x2 (channels * 2) -> channels * 6 input channels
+        self.decoder2 = DoubleConv(channels * 6, channels * 2)
+        # Decoder 1 concatenates x_up1 (channels * 2) and x1 (channels) -> channels * 3 input channels
+        self.decoder1 = DoubleConv(channels * 3, channels)
         
         self.final_conv = nn.Conv2d(channels, 1, kernel_size=1)
 
@@ -85,10 +90,10 @@ class ConvolutionalDomainTransform(nn.Module):
         
         # 4. Reconstruct spatial image
         x_up2 = F.interpolate(x_b, scale_factor=2, mode='bilinear', align_corners=True)
-        x4 = self.decoder2(x_up2 + x2)
+        x4 = self.decoder2(torch.cat([x_up2, x2], dim=1))
         
         x_up1 = F.interpolate(x4, scale_factor=2, mode='bilinear', align_corners=True)
-        x5 = self.decoder1(x_up1 + x1)
+        x5 = self.decoder1(torch.cat([x_up1, x1], dim=1))
         
         return self.final_conv(x5)
 
@@ -101,7 +106,9 @@ class ImageUNet(nn.Module):
         super().__init__()
         self.inc = DoubleConv(1, channels)
         self.down = DoubleConv(channels, channels * 2)
-        self.up = DoubleConv(channels * 2, channels)
+        # Skip connection concatenates x_up (channels * 2) and x1 (channels),
+        # resulting in channels * 3 input channels for the up block.
+        self.up = DoubleConv(channels * 3, channels)
         self.outc = nn.Conv2d(channels, 1, kernel_size=1)
 
     def forward(self, x):
@@ -113,7 +120,8 @@ class ImageUNet(nn.Module):
         diffX = x1.size()[3] - x_up.size()[3]
         x_up = F.pad(x_up, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         
-        x3 = self.up(x_up + x1)
+        # Concatenate skip connection along the channel dimension
+        x3 = self.up(torch.cat([x_up, x1], dim=1))
         return self.outc(x3) + x
 
 class PureDLPipeline(nn.Module):

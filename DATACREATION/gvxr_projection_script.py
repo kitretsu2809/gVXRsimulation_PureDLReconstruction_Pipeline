@@ -53,25 +53,24 @@ def preprocess_mesh(stl_filepath, temp_stl_path, safe_fov, scan_method):
 def run_gvxr_pipeline(stl_filepath, output_dir, material="Ti", i0=50000.0, gaussian_std=10.0, scan_method='auto'):
     from gvxrPython3 import gvxr
 
-    print("Initializing gVirtualXray (gVXR) engine...")
-    gvxr.createWindow()
-    gvxr.setWindowSize(1024, 1024)
-
     # 1. Physics Engine Setup
     # X-ray source configuration matching Nikon XT H 225 ST 2x
     sod_mm = 300.0
     sdd_mm = 1100.0
     
-    gvxr.setSourcePosition(0.0, -sod_mm, 0.0, "mm")
-    gvxr.usePointSource()
-    # Spectrum: Using a generic 100kV monochromatic source for clean attenuation
-    gvxr.setMonoChromatic(100.0, "keV", 1000)
-
     # 2. Detector Setup
     # The detector pixel size is 0.2mm. We want a ~250mm FOV, so we need a large detector
     # To cover a 250mm object diagonally, max_diagonal = ~350mm -> 1750x1750.
     det_size_pixels = 1800
     det_pixel_mm = 0.200
+
+    print("Initializing gVirtualXray (gVXR) engine...")
+    gvxr.createWindow()
+    gvxr.setWindowSize(det_size_pixels, det_size_pixels)
+
+    gvxr.setSourcePosition(0.0, -sod_mm, 0.0, "mm")
+    gvxr.usePointSource()
+    gvxr.setMonoChromatic(100.0, "keV", 1000)
 
     gvxr.setDetectorPosition(0.0, sdd_mm - sod_mm, 0.0, "mm")
     gvxr.setDetectorUpVector(0, 0, -1)
@@ -82,7 +81,7 @@ def run_gvxr_pipeline(stl_filepath, output_dir, material="Ti", i0=50000.0, gauss
     magnification = sdd_mm / sod_mm
     detector_width_mm = det_size_pixels * det_pixel_mm
     fov_at_origin = detector_width_mm / magnification
-    safe_fov = fov_at_origin * 0.9 
+    safe_fov = fov_at_origin * 0.8 
 
     # Pre-process the mesh using our robust trimesh function
     if not output_dir.endswith(f"_{scan_method}"):
