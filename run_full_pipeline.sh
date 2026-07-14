@@ -5,6 +5,10 @@ set -e
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate ct_pipeline
 
+# Force OpenGL (gVXR) to use discrete NVIDIA GPU on hybrid laptops
+export __NV_PRIME_RENDER_OFFLOAD=1
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+
 echo "================================================================"
 echo "Step 1: Generating Projections using gVXR"
 echo "================================================================"

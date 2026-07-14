@@ -319,6 +319,10 @@ class App:
             try:
                 env = os.environ.copy()
                 env["PYTHONUNBUFFERED"] = "1"
+                # Force OpenGL apps (gVXR) to use discrete NVIDIA GPU on hybrid laptops
+                env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
+                env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
+                
                 self.proc = subprocess.Popen(
                     [str(c) for c in cmd],
                     cwd=str(REPO_ROOT),
