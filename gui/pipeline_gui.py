@@ -302,5 +302,21 @@ class App:
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     root = tk.Tk()
+
+    # Enable High DPI scaling for Linux/Windows
+    try:
+        root.tk.call('tk', 'scaling', 2.0) # Double the internal scaling factor
+    except Exception:
+        pass
+
+    # Increase default font size so everything scales up proportionally
+    from tkinter import font
+    default_font = font.nametofont("TkDefaultFont")
+    default_font.configure(size=12)
+    text_font = font.nametofont("TkTextFont")
+    text_font.configure(size=12)
+    fixed_font = font.nametofont("TkFixedFont")
+    fixed_font.configure(size=12)
+
     App(root)
     root.mainloop()
