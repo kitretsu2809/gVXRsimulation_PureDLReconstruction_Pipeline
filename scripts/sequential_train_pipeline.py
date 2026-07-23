@@ -225,6 +225,13 @@ def main() -> None:
              "material variation, and 2 training epochs. Finishes in minutes. "
              "Use this to verify the full pipeline works before a real run.",
     )
+    parser.add_argument(
+        "--data-only",
+        action="store_true",
+        help="Only generate projections, FDK volumes, and .npz datasets. "
+             "Skip training and inference entirely. Use this to prepare data "
+             "on a machine with OpenGL (laptop) and train elsewhere (lab/Colab).",
+    )
     args = parser.parse_args()
 
     # --quick-test overrides: 1 STL, 1 material, 2 epochs, low resolution
@@ -385,76 +392,77 @@ def main() -> None:
         dirs_to_delete.append(batch_dir)
 
         # Build training command
-        checkpoint = state.get("last_checkpoint")
-        train_cmd = [
-            sys.executable, _TRAIN_SCRIPT,
-            "--dataset-path",   batch_dir,
-            "--epochs",         args.epochs,
-            "--batch-size",     args.batch_size,
-            "--learning-rate",  f"{lr:.6f}",
-            "--val-fraction",   args.val_fraction,
-            "--scan-method",    "centered",      # always use centered for the model
-        ]
-        if checkpoint and (args.dry_run or Path(checkpoint).exists()):
-            train_cmd += ["--resume-checkpoint", checkpoint]
-            resume_label = f"resume from {Path(checkpoint).name}"
+        if args.data_only:
+            print(f"\n   ℹ️  --data-only mode: skipping training. Datasets saved in {batch_dir}")
         else:
-            resume_label = "fresh training"
+            checkpoint = state.get("last_checkpoint")
+            train_cmd = [
+                sys.executable, _TRAIN_SCRIPT,
+                "--dataset-path",   batch_dir,
+                "--epochs",         args.epochs,
+                "--batch-size",     args.batch_size,
+                "--learning-rate",  f"{lr:.6f}",
+                "--val-fraction",   args.val_fraction,
+                "--scan-method",    "centered",      # always use centered for the model
+            ]
+            if checkpoint and (args.dry_run or Path(checkpoint).exists()):
+                train_cmd += ["--resume-checkpoint", checkpoint]
+                resume_label = f"resume from {Path(checkpoint).name}"
+            else:
+                resume_label = "fresh training"
 
-        run_step(
-            train_cmd,
-            dry_run=args.dry_run,
-            label=f"[{stl_name}] Train model — {resume_label}, lr={lr:.2e}, epochs={args.epochs}",
-        )
+            run_step(
+                train_cmd,
+                dry_run=args.dry_run,
+                label=f"[{stl_name}] Train model — {resume_label}, lr={lr:.2e}, epochs={args.epochs}",
+            )
 
         # ----------------------------------------------------------------
         # Step 5 — Inference (OPTIONAL — only runs if --run-inference is set)
-        # Inference input: Ti_standard projection data of the current STL.
-        # This is the only projection data available at this point (before
-        # cleanup). It runs BEFORE cleanup so the data still exists.
-        # Output: outputs/dl_reconstruction/dl_volume.tif
-        # Always OVERWRITES the same single file — no disk accumulation.
-        # To keep training fast, skip this and run inference manually later.
         # ----------------------------------------------------------------
-        if args.run_inference:
-            best_ckpt     = OUTPUTS_DIR / "pure_dl_training_centered" / "best_model_centered.pt"
-            dl_recon_dir  = OUTPUTS_DIR / "dl_reconstruction"
-            dl_recon_path = dl_recon_dir / "dl_volume.tif"
-            if not args.dry_run:
-                dl_recon_dir.mkdir(parents=True, exist_ok=True)
-                # Delete old reconstruction before writing new one
-                if dl_recon_path.exists():
-                    dl_recon_path.unlink()
-                    print(f"   🗑  Deleted old reconstruction: {dl_recon_path}")
-            if inference_sample_dir is not None:
-                run_step(
-                    [
-                        sys.executable, _INFERENCE_SCRIPT,
-                        "--model-path",  best_ckpt,
-                        "--sample-dir",  inference_sample_dir,
-                        "--output-path", dl_recon_path,
-                        "--batch-size",  8,
-                    ],
-                    dry_run=args.dry_run,
-                    label=f"[{stl_name}] DL Inference → {dl_recon_path}  (input: Ti_standard projections)",
-                )
-                if not args.dry_run and dl_recon_path.exists():
-                    print(f"   📦  Reconstruction saved (overwrote previous): {dl_recon_path}")
-            else:
-                print(f"   [WARN] No inference_sample_dir found — skipping inference for {stl_name}")
+        if args.data_only:
+            print(f"\n   ℹ️  --data-only mode: skipping inference and cleanup.")
+            print(f"       Datasets preserved in: {batch_dir}")
         else:
-            print(f"\n   ℹ️  Inference skipped (use --run-inference to enable). "
-                  f"To run inference manually later, regenerate projections first.")
+            if args.run_inference:
+                best_ckpt     = OUTPUTS_DIR / "pure_dl_training_centered" / "best_model_centered.pt"
+                dl_recon_dir  = OUTPUTS_DIR / "dl_reconstruction"
+                dl_recon_path = dl_recon_dir / "dl_volume.tif"
+                if not args.dry_run:
+                    dl_recon_dir.mkdir(parents=True, exist_ok=True)
+                    # Delete old reconstruction before writing new one
+                    if dl_recon_path.exists():
+                        dl_recon_path.unlink()
+                        print(f"   🗑  Deleted old reconstruction: {dl_recon_path}")
+                if inference_sample_dir is not None:
+                    run_step(
+                        [
+                            sys.executable, _INFERENCE_SCRIPT,
+                            "--model-path",  best_ckpt,
+                            "--sample-dir",  inference_sample_dir,
+                            "--output-path", dl_recon_path,
+                            "--batch-size",  8,
+                        ],
+                        dry_run=args.dry_run,
+                        label=f"[{stl_name}] DL Inference → {dl_recon_path}  (input: Ti_standard projections)",
+                    )
+                    if not args.dry_run and dl_recon_path.exists():
+                        print(f"   📦  Reconstruction saved (overwrote previous): {dl_recon_path}")
+                else:
+                    print(f"   [WARN] No inference_sample_dir found — skipping inference for {stl_name}")
+            else:
+                print(f"\n   ℹ️  Inference skipped (use --run-inference to enable). "
+                      f"To run inference manually later, regenerate projections first.")
 
-        # ----------------------------------------------------------------
-        # Step 6 — Cleanup: delete all generated data for this STL
-        # ----------------------------------------------------------------
-        print(f"\n{'─'*62}")
-        print(f"  🧹  Cleaning up data for {stl_name} ...")
-        for d in dirs_to_delete:
-            delete_dir(d, args.dry_run)
-        for f in files_to_delete:
-            delete_file(f, args.dry_run)
+            # ----------------------------------------------------------------
+            # Step 6 — Cleanup: delete all generated data for this STL
+            # ----------------------------------------------------------------
+            print(f"\n{'─'*62}")
+            print(f"  🧹  Cleaning up data for {stl_name} ...")
+            for d in dirs_to_delete:
+                delete_dir(d, args.dry_run)
+            for f in files_to_delete:
+                delete_file(f, args.dry_run)
 
         # ----------------------------------------------------------------
         # Step 7 — Save state
