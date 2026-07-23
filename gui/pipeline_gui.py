@@ -111,6 +111,16 @@ class App:
         self.batch_size = tk.StringVar(value="2")
         tk.Entry(row2, textvariable=self.batch_size, width=6).pack(side=tk.LEFT)
 
+        row_res = tk.Frame(self.train_frame); row_res.pack(fill=tk.X, pady=1)
+        tk.Label(row_res, text="Downsample", width=12, anchor="w").pack(side=tk.LEFT)
+        self.downsample = tk.StringVar(value="2")
+        tk.Entry(row_res, textvariable=self.downsample, width=6).pack(side=tk.LEFT)
+
+        row_img = tk.Frame(self.train_frame); row_img.pack(fill=tk.X, pady=1)
+        tk.Label(row_img, text="Image Size", width=12, anchor="w").pack(side=tk.LEFT)
+        self.image_size = tk.StringVar(value="256")
+        tk.Entry(row_img, textvariable=self.image_size, width=6).pack(side=tk.LEFT)
+
         row3 = tk.Frame(self.train_frame); row3.pack(fill=tk.X, pady=1)
         tk.Label(row3, text="Scan method", width=12, anchor="w").pack(side=tk.LEFT)
         self.scan_method = tk.StringVar(value="auto")
@@ -311,6 +321,8 @@ class App:
             cmd = conda_python() + [str(SEQ_SCRIPT),
                   "--epochs",      self.epochs.get(),
                   "--batch-size",  self.batch_size.get(),
+                  "--downsample",  self.downsample.get(),
+                  "--image-size",  self.image_size.get(),
                   "--scan-method", self.scan_method.get()]
             if self.flag_dry.get():   cmd.append("--dry-run")
             if self.flag_infer.get(): cmd.append("--run-inference")

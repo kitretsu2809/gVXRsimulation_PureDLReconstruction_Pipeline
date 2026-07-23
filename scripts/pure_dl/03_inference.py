@@ -67,7 +67,13 @@ def main():
 
     print(f"Downsampling and converting to attenuation...")
     projections_ds = downsample_projection_stack(sample.projections, metadata["downsample_factor"])
-    attenuation = convert_to_attenuation(projections_ds)
+    
+    # CRITICAL MATH FIX: We must load the pre-calculated scales to undo the 16-bit TIFF normalization.
+    # Otherwise, the network receives botched exposure values during inference!
+    scales_path = sample_dir / "sino_scales.npy"
+    if not scales_path.exists():
+        print(f"WARNING: {scales_path} not found! Exposure may be mathematically incorrect.")
+    attenuation = convert_to_attenuation(projections_ds, scales_path=scales_path)
 
     dense_angle_count = int(attenuation.shape[0])
     sparse_indices = np.arange(0, dense_angle_count, metadata["sparse_step"], dtype=np.int32)

@@ -93,7 +93,7 @@ def main():
     image_min = float(target_volume.min())
     image_max = float(target_volume.max())
     image_scale = max(image_max - image_min, 1e-6)
-    sinogram_scale = float(np.percentile(attenuation, 99.5))
+    sinogram_scale = float(np.percentile(attenuation, 99.9))
     sinogram_scale = max(sinogram_scale, 1e-6)
 
     selected_slice_indices = np.arange(0, target_volume.shape[0], args.slice_stride, dtype=np.int32)
@@ -110,8 +110,8 @@ def main():
         sparse_sinogram_resized = resize_2d_array(sparse_sinogram, (len(sparse_indices), args.detector_count))
         target_image = resize_2d_array(target_volume[slice_idx], (args.image_size, args.image_size))
 
-        input_sinograms.append(np.clip(sparse_sinogram_resized / sinogram_scale, 0.0, None).astype(np.float32))
-        target_sinograms.append(np.clip(dense_sinogram_resized / sinogram_scale, 0.0, None).astype(np.float32))
+        input_sinograms.append(np.clip(sparse_sinogram_resized / sinogram_scale, 0.0, 1.0).astype(np.float32))
+        target_sinograms.append(np.clip(dense_sinogram_resized / sinogram_scale, 0.0, 1.0).astype(np.float32))
         target_images.append(np.clip((target_image - image_min) / image_scale, 0.0, 1.0).astype(np.float32))
 
     output_path = resolve_repo_path(args.output_path)

@@ -150,6 +150,7 @@ def main():
         raise ValueError("image_size is not available in metadata and could not be inferred from data")
     model = PureDLPipeline(target_image_size=target_size).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     l1_loss = nn.L1Loss()
 
     # --- Resume from checkpoint if requested ---
@@ -161,6 +162,10 @@ def main():
         print(f"Resuming from checkpoint: {ckpt_path}")
         checkpoint = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
+        if "optimizer_state_dict" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if "scheduler_state_dict" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         # Restore best val loss so the model only gets overwritten if it genuinely improves
         prev_history = checkpoint.get("history", {})
         prev_logs = prev_history.get("epoch_logs", [])
@@ -205,10 +210,13 @@ def main():
             loss_sino = l1_loss(clean_sinogram, target_sino)
             loss_rough_image = l1_loss(rough_image, target_image)
             loss_final_image = l1_loss(final_image, target_image)
-            total_loss = loss_sino + loss_rough_image + loss_final_image
+            # Weight: final image is what we care about; sinogram and rough losses
+            # are auxiliary supervision signals that should not dominate.
+            total_loss = 0.1 * loss_sino + 0.3 * loss_rough_image + 0.6 * loss_final_image
 
             optimizer.zero_grad(set_to_none=True)
             total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             train_losses.append(float(total_loss.item()))
             
@@ -233,7 +241,7 @@ def main():
                 loss_sino = l1_loss(clean_sinogram, target_sino)
                 loss_rough_image = l1_loss(rough_image, target_image)
                 loss_final_image = l1_loss(final_image, target_image)
-                total_loss = loss_sino + loss_rough_image + loss_final_image
+                total_loss = 0.1 * loss_sino + 0.3 * loss_rough_image + 0.6 * loss_final_image
                 
                 val_losses.append(float(total_loss.item()))
 
@@ -251,13 +259,18 @@ def main():
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "val_psnr": val_psnr,
+                "lr": optimizer.param_groups[0]['lr']
             }
         )
         save_history(history, output_dir)
+        
+        scheduler.step()
 
         torch.save(
             {
                 "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
                 "metadata": metadata.__dict__,
                 "epoch": epoch,
                 "history": history,
@@ -269,6 +282,8 @@ def main():
             torch.save(
                 {
                     "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
                     "metadata": metadata.__dict__,
                     "epoch": epoch,
                     "history": history,

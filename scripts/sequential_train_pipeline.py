@@ -77,20 +77,15 @@ LR_FLOOR   = 5e-5
 # ---------------------------------------------------------------------------
 MATERIAL_VARIATIONS = [
     # ---- Standard reference ----
-    {"suffix": "Ti_standard",      "material": "Ti", "i0": 50000.0, "gaussian_std": 10.0},
-    # ---- Lightweight metals ----
-    {"suffix": "Mg_lightweight",   "material": "Mg", "i0": 50000.0, "gaussian_std": 10.0},  # 1.74 g/cm³
+    {"suffix": "Ti_standard",      "material": "Ti", "i0": 50000.0, "gaussian_std": 10.0},  # 4.51 g/cm³
+    # ---- Lightweight metal ----
     {"suffix": "Al_low_density",   "material": "Al", "i0": 50000.0, "gaussian_std": 10.0},  # 2.70 g/cm³
-    # ---- Medium-density structural metals ----
-    {"suffix": "Fe_iron",          "material": "Fe", "i0": 50000.0, "gaussian_std": 10.0},  # 7.87 g/cm³
-    {"suffix": "Ni_nickel",        "material": "Ni", "i0": 50000.0, "gaussian_std": 10.0},  # 8.90 g/cm³
+    # ---- Heavy structural metal ----
     {"suffix": "Cu_copper",        "material": "Cu", "i0": 50000.0, "gaussian_std": 10.0},  # 8.96 g/cm³
-    # ---- High-density metals ----
-    {"suffix": "Pb_lead",          "material": "Pb", "i0": 50000.0, "gaussian_std": 10.0},  # 11.3 g/cm³
+    # ---- Ultra-dense metal ----
     {"suffix": "W_tungsten",       "material": "W",  "i0": 50000.0, "gaussian_std": 10.0},  # 19.3 g/cm³
-    # ---- Noise stress tests ----
+    # ---- Noise stress test ----
     {"suffix": "Ti_high_noise",    "material": "Ti", "i0": 10000.0, "gaussian_std": 20.0},  # Low photon count
-    {"suffix": "Ti_no_noise",      "material": "Ti", "i0": 50000.0, "gaussian_std":  0.0},  # Perfect reference
 ]
 
 # Script paths (relative to repo root)
@@ -232,10 +227,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # --quick-test overrides: 1 STL, 1 material, 2 epochs
+    # --quick-test overrides: 1 STL, 1 material, 2 epochs, low resolution
     if args.quick_test:
-        print("\n⚡  QUICK-TEST MODE: 1 STL · Ti_standard only · 2 epochs")
+        print("\n⚡  QUICK-TEST MODE: 1 STL · Ti_standard only · 2 epochs · Low-Res (128x128)")
         args.epochs = 2
+        args.downsample = 4
+        args.image_size = 128
         material_variations = [MATERIAL_VARIATIONS[0]]  # Ti_standard only
     else:
         material_variations = MATERIAL_VARIATIONS
@@ -295,21 +292,26 @@ def main() -> None:
             out_dir      = data_dir / dataset_name
 
             # ---- 1. gVXR projection simulation ----
-            run_step(
-                [
-                    sys.executable, _GVXR_SCRIPT,
-                    "--stl",           stl_path,
-                    "--output_dir",    out_dir,
-                    "--material",      var["material"],
-                    "--i0",            var["i0"],
-                    "--gaussian-std",  var["gaussian_std"],
-                    "--scan-method",   args.scan_method,
-                ],
-                dry_run=args.dry_run,
-                label=f"[{stl_name}] gVXR simulation — {tag} ({var['material']}, {var['i0']:.0f} photons)",
-            )
             # gVXR script appends _<scan_method> to the output dir
             actual_data_dir = Path(f"{out_dir}_{args.scan_method}")
+
+            if actual_data_dir.exists() and (actual_data_dir / "settings.cto").exists():
+                print(f"\n   ⏭  Skipping gVXR for {tag} — projections already exist at {actual_data_dir}")
+            else:
+                run_step(
+                    [
+                        sys.executable, _GVXR_SCRIPT,
+                        "--stl",           stl_path,
+                        "--output_dir",    out_dir,
+                        "--material",      var["material"],
+                        "--i0",            var["i0"],
+                        "--gaussian-std",  var["gaussian_std"],
+                        "--scan-method",   args.scan_method,
+                    ],
+                    dry_run=args.dry_run,
+                    label=f"[{stl_name}] gVXR simulation — {tag} ({var['material']}, {var['i0']:.0f} photons)",
+                )
+
             dirs_to_delete.append(actual_data_dir)
             # Use the first variation as the inference reference sample
             if inference_sample_dir is None:
@@ -318,34 +320,55 @@ def main() -> None:
             # ---- 2. FDK reconstruction (reference volume) ----
             fdk_out_dir  = OUTPUTS_DIR / f"fdk_{stl_name}_{tag}"
             fdk_vol_path = fdk_out_dir / "fdk_volume.tif"
-            run_step(
-                [
-                    sys.executable, _FDK_SCRIPT,
-                    "--sample-dir", actual_data_dir,
-                    "--downsample", args.downsample,
-                    "--output-dir", fdk_out_dir,
-                ],
-                dry_run=args.dry_run,
-                label=f"[{stl_name}] FDK reconstruction — {tag}",
-            )
+
+            if fdk_vol_path.exists():
+                print(f"\n   ⏭  Skipping FDK for {tag} — volume already exists at {fdk_vol_path}")
+            else:
+                run_step(
+                    [
+                        sys.executable, _FDK_SCRIPT,
+                        "--sample-dir", actual_data_dir,
+                        "--downsample", args.downsample,
+                        "--output-dir", fdk_out_dir,
+                    ],
+                    dry_run=args.dry_run,
+                    label=f"[{stl_name}] FDK reconstruction — {tag}",
+                )
             dirs_to_delete.append(fdk_out_dir)
 
             # ---- 3. Build .npz dataset ----
             npz_path = OUTPUTS_DIR / f"seq_{stl_name}_{tag}.npz"
-            run_step(
-                [
-                    sys.executable, _BUILD_SCRIPT,
-                    "--sample-dir",       actual_data_dir,
-                    "--target-volume",    fdk_vol_path,
-                    "--output-path",      npz_path,
-                    "--downsample-factor",args.downsample,
-                    "--image-size",       args.image_size,
-                ],
-                dry_run=args.dry_run,
-                label=f"[{stl_name}] Build dataset — {tag}",
-            )
+            if npz_path.exists():
+                print(f"\n   ⏭  Skipping dataset build for {tag} — {npz_path.name} already exists")
+            else:
+                run_step(
+                    [
+                        sys.executable, _BUILD_SCRIPT,
+                        "--sample-dir",       actual_data_dir,
+                        "--target-volume",    fdk_vol_path,
+                        "--output-path",      npz_path,
+                        "--downsample-factor",args.downsample,
+                        "--image-size",       args.image_size,
+                    ],
+                    dry_run=args.dry_run,
+                    label=f"[{stl_name}] Build dataset — {tag}",
+                )
             npz_files.append(npz_path)
             files_to_delete.append(npz_path)
+
+            # ---- 4. Immediate Cleanup (Save Storage!) ----
+            # Projections and FDK volumes are massive (5GB+ per variation).
+            # We must delete them immediately to prevent filling the user's hard drive.
+            # But only delete if the .npz has been successfully created.
+            if npz_path.exists():
+                if args.run_inference and actual_data_dir == inference_sample_dir:
+                    # Keep the first variation's projections around for inference later
+                    print(f"   [INFO] Keeping {actual_data_dir.name} projections for inference later.")
+                    # We can still delete its FDK volume since inference only needs projections
+                    delete_dir(fdk_out_dir, args.dry_run)
+                else:
+                    delete_dir(actual_data_dir, args.dry_run)
+                    delete_dir(fdk_out_dir, args.dry_run)
 
         # ----------------------------------------------------------------
         # Step 4 — Move all .npz files into a batch folder for multi-file
