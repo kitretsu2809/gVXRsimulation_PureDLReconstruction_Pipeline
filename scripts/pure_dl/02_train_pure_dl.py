@@ -217,6 +217,8 @@ def main():
             target_sino = target_sino.to(device)
             target_image = target_image.to(device)
 
+            final_image, clean_sinogram, rough_image = model(noisy_sino)
+            
             loss_sino = l1_loss(clean_sinogram, target_sino)
             loss_rough_image = l1_loss(rough_image, target_image)
             loss_final_image = l1_loss(final_image, target_image)
