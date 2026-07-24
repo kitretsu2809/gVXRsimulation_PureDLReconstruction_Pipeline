@@ -159,6 +159,34 @@ def main():
     
     print(f"Saving fully reconstructed 3D volume to: {output_path}")
     tifffile.imwrite(output_path, output_volume)
+    
+    # Save contrast-normalized 3-axis preview PNG automatically
+    try:
+        import matplotlib.pyplot as plt
+        preview_path = output_path.parent / f"{output_path.stem}_preview.png"
+        z_mid = output_volume.shape[0] // 2
+        y_mid = output_volume.shape[1] // 2
+        x_mid = output_volume.shape[2] // 2
+        
+        v_min, v_max = np.percentile(output_volume, 1), np.percentile(output_volume, 99)
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        axes[0].imshow(output_volume[z_mid], cmap='gray', vmin=v_min, vmax=v_max)
+        axes[0].set_title(f"Axial Slice (Z={z_mid})")
+        
+        axes[1].imshow(output_volume[:, y_mid, :], cmap='gray', aspect='auto', vmin=v_min, vmax=v_max)
+        axes[1].set_title(f"Coronal Slice (Y={y_mid})")
+        
+        axes[2].imshow(output_volume[:, :, x_mid], cmap='gray', aspect='auto', vmin=v_min, vmax=v_max)
+        axes[2].set_title(f"Sagittal Slice (X={x_mid})")
+        
+        plt.tight_layout()
+        fig.savefig(preview_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved 3-axis contrast preview to: {preview_path}")
+    except Exception as e:
+        print(f"Note: Could not save PNG preview: {e}")
+
     print("Inference Complete!")
 
 if __name__ == "__main__":

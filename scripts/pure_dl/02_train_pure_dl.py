@@ -15,6 +15,18 @@ from ct_recon.paths import OUTPUTS_DIR, resolve_repo_path
 from ct_recon.sparse_ct_reconstruction import _import_torch_or_exit, load_sparse_dataset, psnr_np, save_history
 from ct_recon.pure_dl_net import PureDLPipeline
 
+def compute_sobel_loss(pred, target, torch_F):
+    kernel_x = torch_F.conv2d.device if hasattr(pred, 'device') else None
+    kx = pred.new_tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]).view(1, 1, 3, 3)
+    ky = pred.new_tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]]).view(1, 1, 3, 3)
+    
+    pred_gx = torch_F.conv2d(pred, kx, padding=1)
+    pred_gy = torch_F.conv2d(pred, ky, padding=1)
+    target_gx = torch_F.conv2d(target, kx, padding=1)
+    target_gy = torch_F.conv2d(target, ky, padding=1)
+    
+    return torch_F.l1_loss(pred_gx, target_gx) + torch_F.l1_loss(pred_gy, target_gy)
+
 def split_indices(count: int, val_fraction: float, seed: int) -> tuple[list[int], list[int]]:
     indices = list(range(count))
     rng = random.Random(seed)
@@ -205,14 +217,13 @@ def main():
             target_sino = target_sino.to(device)
             target_image = target_image.to(device)
 
-            final_image, clean_sinogram, rough_image = model(noisy_sino)
-            
             loss_sino = l1_loss(clean_sinogram, target_sino)
             loss_rough_image = l1_loss(rough_image, target_image)
             loss_final_image = l1_loss(final_image, target_image)
-            # Weight: final image is what we care about; sinogram and rough losses
-            # are auxiliary supervision signals that should not dominate.
-            total_loss = 0.1 * loss_sino + 0.3 * loss_rough_image + 0.6 * loss_final_image
+            loss_edge = compute_sobel_loss(final_image, target_image, F)
+            
+            # Weighting: 0.4*final + 0.4*edge forces high-frequency edge sharpness
+            total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
 
             optimizer.zero_grad(set_to_none=True)
             total_loss.backward()
@@ -241,7 +252,8 @@ def main():
                 loss_sino = l1_loss(clean_sinogram, target_sino)
                 loss_rough_image = l1_loss(rough_image, target_image)
                 loss_final_image = l1_loss(final_image, target_image)
-                total_loss = 0.1 * loss_sino + 0.3 * loss_rough_image + 0.6 * loss_final_image
+                loss_edge = compute_sobel_loss(final_image, target_image, F)
+                total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
                 
                 val_losses.append(float(total_loss.item()))
 
