@@ -16,15 +16,14 @@ from ct_recon.sparse_ct_reconstruction import _import_torch_or_exit, load_sparse
 from ct_recon.pure_dl_net import PureDLPipeline
 
 def compute_sobel_loss(pred, target, torch_F):
-    kernel_x = torch_F.conv2d.device if hasattr(pred, 'device') else None
     kx = pred.new_tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]).view(1, 1, 3, 3)
     ky = pred.new_tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]]).view(1, 1, 3, 3)
-    
+
     pred_gx = torch_F.conv2d(pred, kx, padding=1)
     pred_gy = torch_F.conv2d(pred, ky, padding=1)
     target_gx = torch_F.conv2d(target, kx, padding=1)
     target_gy = torch_F.conv2d(target, ky, padding=1)
-    
+
     return torch_F.l1_loss(pred_gx, target_gx) + torch_F.l1_loss(pred_gy, target_gy)
 
 def split_indices(count: int, val_fraction: float, seed: int) -> tuple[list[int], list[int]]:
