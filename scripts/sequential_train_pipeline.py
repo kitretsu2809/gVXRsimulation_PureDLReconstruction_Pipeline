@@ -200,6 +200,12 @@ def main() -> None:
         help="Target image size for training slices (default: 256)",
     )
     parser.add_argument(
+        "--sparse-step",
+        type=int,
+        default=1,
+        help="Projection sampling step (default: 1 — uses ALL 360 projection angles for full dense reconstruction)",
+    )
+    parser.add_argument(
         "--val-fraction",
         type=float,
         default=0.2,
@@ -363,6 +369,7 @@ def main() -> None:
                             "--output-path",      npz_path,
                             "--downsample-factor",args.downsample,
                             "--image-size",       args.image_size,
+                            "--sparse-step",      args.sparse_step,
                         ],
                         dry_run=args.dry_run,
                         label=f"[{stl_name}] Build dataset — {tag}",
