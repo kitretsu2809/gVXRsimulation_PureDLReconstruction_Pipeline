@@ -38,7 +38,7 @@ def split_indices(count: int, val_fraction: float, seed: int) -> tuple[list[int]
     return train_indices, valid_indices
 
 def main():
-    torch, nn, _ = _import_torch_or_exit()
+    torch, nn, F = _import_torch_or_exit()
     from torch.utils.data import DataLoader, Dataset, ConcatDataset
 
     class DualDomainDataset(Dataset):
