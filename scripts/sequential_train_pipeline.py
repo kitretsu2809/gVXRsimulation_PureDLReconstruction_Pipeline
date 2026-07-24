@@ -290,106 +290,112 @@ def main() -> None:
         # Track first variation's data dir for inference (we use Ti_standard as reference)
         inference_sample_dir = None
 
-        # ----------------------------------------------------------------
-        # Step 1 + 2 + 3  (per material variation)
-        # ----------------------------------------------------------------
-        for var in material_variations:
-            tag          = var["suffix"]
-            dataset_name = f"{stl_name}_{tag}"
-            out_dir      = data_dir / dataset_name
-
-            # ---- 1. gVXR projection simulation ----
-            # gVXR script appends _<scan_method> to the output dir
-            actual_data_dir = Path(f"{out_dir}_{args.scan_method}")
-
-            if actual_data_dir.exists() and (actual_data_dir / "settings.cto").exists():
-                print(f"\n   ⏭  Skipping gVXR for {tag} — projections already exist at {actual_data_dir}")
-            else:
-                run_step(
-                    [
-                        sys.executable, _GVXR_SCRIPT,
-                        "--stl",           stl_path,
-                        "--output_dir",    out_dir,
-                        "--material",      var["material"],
-                        "--i0",            var["i0"],
-                        "--gaussian-std",  var["gaussian_std"],
-                        "--scan-method",   args.scan_method,
-                    ],
-                    dry_run=args.dry_run,
-                    label=f"[{stl_name}] gVXR simulation — {tag} ({var['material']}, {var['i0']:.0f} photons)",
-                )
-
-            dirs_to_delete.append(actual_data_dir)
-            # Use the first variation as the inference reference sample
-            if inference_sample_dir is None:
-                inference_sample_dir = actual_data_dir
-
-            # ---- 2. FDK reconstruction (reference volume) ----
-            fdk_out_dir  = OUTPUTS_DIR / f"fdk_{stl_name}_{tag}"
-            fdk_vol_path = fdk_out_dir / "fdk_volume.tif"
-
-            if fdk_vol_path.exists():
-                print(f"\n   ⏭  Skipping FDK for {tag} — volume already exists at {fdk_vol_path}")
-            else:
-                run_step(
-                    [
-                        sys.executable, _FDK_SCRIPT,
-                        "--sample-dir", actual_data_dir,
-                        "--downsample", args.downsample,
-                        "--output-dir", fdk_out_dir,
-                    ],
-                    dry_run=args.dry_run,
-                    label=f"[{stl_name}] FDK reconstruction — {tag}",
-                )
-            dirs_to_delete.append(fdk_out_dir)
-
-            # ---- 3. Build .npz dataset ----
-            npz_path = OUTPUTS_DIR / f"seq_{stl_name}_{tag}.npz"
-            if npz_path.exists():
-                print(f"\n   ⏭  Skipping dataset build for {tag} — {npz_path.name} already exists")
-            else:
-                run_step(
-                    [
-                        sys.executable, _BUILD_SCRIPT,
-                        "--sample-dir",       actual_data_dir,
-                        "--target-volume",    fdk_vol_path,
-                        "--output-path",      npz_path,
-                        "--downsample-factor",args.downsample,
-                        "--image-size",       args.image_size,
-                    ],
-                    dry_run=args.dry_run,
-                    label=f"[{stl_name}] Build dataset — {tag}",
-                )
-            npz_files.append(npz_path)
-            files_to_delete.append(npz_path)
-
-            # ---- 4. Immediate Cleanup (Save Storage!) ----
-            # Projections and FDK volumes are massive (5GB+ per variation).
-            # We must delete them immediately to prevent filling the user's hard drive.
-            # But only delete if the .npz has been successfully created.
-            if npz_path.exists():
-                if args.run_inference and actual_data_dir == inference_sample_dir:
-                    # Keep the first variation's projections around for inference later
-                    print(f"   [INFO] Keeping {actual_data_dir.name} projections for inference later.")
-                    # We can still delete its FDK volume since inference only needs projections
-                    delete_dir(fdk_out_dir, args.dry_run)
-                else:
-                    delete_dir(actual_data_dir, args.dry_run)
-                    delete_dir(fdk_out_dir, args.dry_run)
-
-        # ----------------------------------------------------------------
-        # Step 4 — Move all .npz files into a batch folder for multi-file
-        #           training, then call 02_train_pure_dl.py
-        # ----------------------------------------------------------------
         batch_dir = OUTPUTS_DIR / f"seq_batch_{stl_name}"
-        if not args.dry_run:
-            batch_dir.mkdir(parents=True, exist_ok=True)
-            for npz in npz_files:
-                if npz.exists():
-                    npz.rename(batch_dir / npz.name)
+        existing_npz = list(batch_dir.glob("*.npz")) if batch_dir.exists() else []
+
+        if existing_npz:
+            print(f"\n   ⏭  Found {len(existing_npz)} pre-built .npz dataset(s) in {batch_dir}")
+            print(f"   ⚡  Skipping gVXR simulation & FDK reconstruction — jumping straight to training!")
         else:
-            print(f"\n[DRY-RUN] Would create {batch_dir} and move {len(npz_files)} .npz files into it")
-        dirs_to_delete.append(batch_dir)
+            # ----------------------------------------------------------------
+            # Step 1 + 2 + 3  (per material variation)
+            # ----------------------------------------------------------------
+            for var in material_variations:
+                tag          = var["suffix"]
+                dataset_name = f"{stl_name}_{tag}"
+                out_dir      = data_dir / dataset_name
+
+                # ---- 1. gVXR projection simulation ----
+                # gVXR script appends _<scan_method> to the output dir
+                actual_data_dir = Path(f"{out_dir}_{args.scan_method}")
+
+                if actual_data_dir.exists() and (actual_data_dir / "settings.cto").exists():
+                    print(f"\n   ⏭  Skipping gVXR for {tag} — projections already exist at {actual_data_dir}")
+                else:
+                    run_step(
+                        [
+                            sys.executable, _GVXR_SCRIPT,
+                            "--stl",           stl_path,
+                            "--output_dir",    out_dir,
+                            "--material",      var["material"],
+                            "--i0",            var["i0"],
+                            "--gaussian-std",  var["gaussian_std"],
+                            "--scan-method",   args.scan_method,
+                        ],
+                        dry_run=args.dry_run,
+                        label=f"[{stl_name}] gVXR simulation — {tag} ({var['material']}, {var['i0']:.0f} photons)",
+                    )
+
+                dirs_to_delete.append(actual_data_dir)
+                # Use the first variation as the inference reference sample
+                if inference_sample_dir is None:
+                    inference_sample_dir = actual_data_dir
+
+                # ---- 2. FDK reconstruction (reference volume) ----
+                fdk_out_dir  = OUTPUTS_DIR / f"fdk_{stl_name}_{tag}"
+                fdk_vol_path = fdk_out_dir / "fdk_volume.tif"
+
+                if fdk_vol_path.exists():
+                    print(f"\n   ⏭  Skipping FDK for {tag} — volume already exists at {fdk_vol_path}")
+                else:
+                    run_step(
+                        [
+                            sys.executable, _FDK_SCRIPT,
+                            "--sample-dir", actual_data_dir,
+                            "--downsample", args.downsample,
+                            "--output-dir", fdk_out_dir,
+                        ],
+                        dry_run=args.dry_run,
+                        label=f"[{stl_name}] FDK reconstruction — {tag}",
+                    )
+                dirs_to_delete.append(fdk_out_dir)
+
+                # ---- 3. Build .npz dataset ----
+                npz_path = OUTPUTS_DIR / f"seq_{stl_name}_{tag}.npz"
+                if npz_path.exists():
+                    print(f"\n   ⏭  Skipping dataset build for {tag} — {npz_path.name} already exists")
+                else:
+                    run_step(
+                        [
+                            sys.executable, _BUILD_SCRIPT,
+                            "--sample-dir",       actual_data_dir,
+                            "--target-volume",    fdk_vol_path,
+                            "--output-path",      npz_path,
+                            "--downsample-factor",args.downsample,
+                            "--image-size",       args.image_size,
+                        ],
+                        dry_run=args.dry_run,
+                        label=f"[{stl_name}] Build dataset — {tag}",
+                    )
+                npz_files.append(npz_path)
+                files_to_delete.append(npz_path)
+
+                # ---- 4. Immediate Cleanup (Save Storage!) ----
+                # Projections and FDK volumes are massive (5GB+ per variation).
+                # We must delete them immediately to prevent filling the user's hard drive.
+                # But only delete if the .npz has been successfully created.
+                if npz_path.exists():
+                    if args.run_inference and actual_data_dir == inference_sample_dir:
+                        # Keep the first variation's projections around for inference later
+                        print(f"   [INFO] Keeping {actual_data_dir.name} projections for inference later.")
+                        # We can still delete its FDK volume since inference only needs projections
+                        delete_dir(fdk_out_dir, args.dry_run)
+                    else:
+                        delete_dir(actual_data_dir, args.dry_run)
+                        delete_dir(fdk_out_dir, args.dry_run)
+
+            # ----------------------------------------------------------------
+            # Step 4 — Move all .npz files into a batch folder for multi-file
+            #           training, then call 02_train_pure_dl.py
+            # ----------------------------------------------------------------
+            if not args.dry_run:
+                batch_dir.mkdir(parents=True, exist_ok=True)
+                for npz in npz_files:
+                    if npz.exists():
+                        npz.rename(batch_dir / npz.name)
+            else:
+                print(f"\n[DRY-RUN] Would create {batch_dir} and move {len(npz_files)} .npz files into it")
+        # NOTE: Do NOT add batch_dir to dirs_to_delete so the dataset remains preserved for future training runs!
 
         # Build training command
         if args.data_only:
