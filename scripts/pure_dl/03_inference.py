@@ -137,7 +137,7 @@ def main():
         sparse_sinogram_resized = resize_2d_array(sparse_sinogram, (len(sparse_indices), metadata["detector_count"]))
         
         # Normalize
-        normalized_sino = np.clip(sparse_sinogram_resized / metadata["sinogram_scale"], 0.0, None).astype(np.float32)
+        normalized_sino = np.clip(sparse_sinogram_resized / metadata["sinogram_scale"], 0.0, 1.0).astype(np.float32)
         
         batch_sinograms.append(normalized_sino)
         batch_indices.append(vol_idx)
@@ -160,7 +160,24 @@ def main():
     print(f"Saving fully reconstructed 3D volume to: {output_path}")
     tifffile.imwrite(output_path, output_volume)
     
-    # Save contrast-normalized 3-axis preview PNG automatically
+    # 7. Export to CAD format (STL/OBJ) for FreeCAD/SolidWorks/AutoCAD
+    try:
+        from ct_recon.volume_to_cad import export_volume_to_cad
+        stl_path = output_path.parent / f"{output_path.stem}.stl"
+        obj_path = output_path.parent / f"{output_path.stem}.obj"
+        print(f"\nExporting 3D mesh for CAD software...")
+        export_volume_to_cad(
+            volume=output_volume,
+            output_stl_path=str(stl_path),
+            output_obj_path=str(obj_path),
+        )
+        print(f"✅ STL saved: {stl_path}")
+        print(f"✅ OBJ saved: {obj_path}")
+        print(f"Open these files in FreeCAD, SolidWorks, or AutoCAD.")
+    except Exception as e:
+        print(f"Note: CAD export skipped ({e}). Install trimesh: pip install trimesh")
+    
+    # 8. Save contrast-normalized 3-axis preview PNG automatically
     try:
         import matplotlib.pyplot as plt
         preview_path = output_path.parent / f"{output_path.stem}_preview.png"
@@ -187,7 +204,7 @@ def main():
     except Exception as e:
         print(f"Note: Could not save PNG preview: {e}")
 
-    print("Inference Complete!")
+    print("\n✅ Inference Complete!")
 
 if __name__ == "__main__":
     main()

@@ -9,3 +9,4 @@ python scripts/pure_dl/02_train_pure_dl.py \
     --resume-checkpoint outputs/pure_dl_training_centered/best_model_centered.pt \
     --learning-rate 1e-4 \
     --epochs 10
+    
