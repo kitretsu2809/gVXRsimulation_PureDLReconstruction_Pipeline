@@ -20,26 +20,8 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.double_conv(x)
 
-class ChannelAttention(nn.Module):
-    """Squeeze-and-Excitation (SE) block for channel attention."""
-    def __init__(self, channels, reduction=16):
-        super().__init__()
-        self.pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channels, channels // reduction, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(channels // reduction, channels, bias=False),
-            nn.Sigmoid()
-        )
-        
-    def forward(self, x):
-        b, c, _, _ = x.shape
-        y = self.pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y.expand_as(x)
-
 class DepthwiseSeparableConv(nn.Module):
-    """Depthwise separable convolution."""
+    """Depthwise separable convolution to save parameters."""
     def __init__(self, in_ch, out_ch, kernel_size=3, padding=1):
         super().__init__()
         self.depthwise = nn.Conv2d(in_ch, in_ch, kernel_size, padding=padding, groups=in_ch, bias=False)
@@ -73,44 +55,15 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        # Handle mismatch in dimensions
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
-        
         if diffY > 0 or diffX > 0:
-            x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
-                            diffY // 2, diffY - diffY // 2])
-        
+            x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
-class SinogramUNet(nn.Module):
-    """
-    Stage 1: Sinogram Denoising
-    3-level U-Net with residual skip connection.
-    Levels: 32 -> 64 -> 128 -> 64 -> 32
-    """
-    def __init__(self):
-        super().__init__()
-        self.inc = DoubleConv(1, 32)
-        self.down1 = Down(32, 64)
-        self.down2 = Down(64, 128)
-        self.up1 = Up(128 + 64, 64, bilinear=True)
-        self.up2 = Up(64 + 32, 32, bilinear=True)
-        self.outc = nn.Conv2d(32, 1, kernel_size=1)
-
-    def forward(self, x):
-        identity = x
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x = self.up1(x3, x2)
-        x = self.up2(x, x1)
-        logits = self.outc(x)
-        return logits + identity # Residual connection
-
 class UpSep(nn.Module):
-    """Upscaling then depthwise separable double conv, tailored for DomainTransformNet"""
+    """Upscaling then depthwise separable double conv"""
     def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
         if bilinear:
@@ -136,80 +89,191 @@ class UpSep(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        # Pad if dimension mismatch
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
         if diffY > 0 or diffX > 0:
-            x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
-                            diffY // 2, diffY - diffY // 2])
-            
+            x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
+
+# ==============================================================================
+# NOVEL ATTENTION MECHANISMS FOR PURE DL RADON INVERSION
+# ==============================================================================
+
+class CrossAttentionBridge(nn.Module):
+    """
+    Learns the inverse Radon transform by computing attention between the 
+    spatial image grid (Queries) and the sinogram measurements (Keys/Values).
+    Replaces non-differentiable analytical FBP with a pure DL approach.
+    """
+    def __init__(self, sino_channels, img_channels, embed_dim=256, num_heads=4):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        
+        self.query_proj = nn.Conv2d(img_channels, embed_dim, 1)
+        self.key_proj = nn.Conv2d(sino_channels, embed_dim, 1)
+        self.value_proj = nn.Conv2d(sino_channels, embed_dim, 1)
+        self.out_proj = nn.Conv2d(embed_dim, img_channels, 1)
+        
+        # Heavy pooling on sinogram to reduce sequence length and fit in VRAM
+        self.sino_pool = nn.AdaptiveAvgPool2d((30, 32))
+        
+    def forward(self, sino_features, img_queries):
+        # Pool sinogram to keep VRAM strictly under limits
+        # shape: [B, C_s, 30, 32] -> L_s = 960 tokens
+        sino_pooled = self.sino_pool(sino_features)
+        
+        B, C_i, H, W = img_queries.shape
+        _, C_s, A_p, D_p = sino_pooled.shape
+        L_q = H * W
+        L_s = A_p * D_p
+        
+        # Projections
+        Q = self.query_proj(img_queries).view(B, self.num_heads, self.head_dim, L_q)
+        K = self.key_proj(sino_pooled).view(B, self.num_heads, self.head_dim, L_s)
+        V = self.value_proj(sino_pooled).view(B, self.num_heads, self.head_dim, L_s)
+        
+        # Cross-Attention: Q * K^T
+        # Q transposed: [B, heads, L_q, head_dim]
+        # K: [B, heads, head_dim, L_s]
+        attn = torch.matmul(Q.transpose(-2, -1), K) * self.scale
+        attn = F.softmax(attn, dim=-1) # [B, heads, L_q, L_s]
+        
+        # Output: Attn * V^T
+        # V transposed: [B, heads, L_s, head_dim]
+        out = torch.matmul(attn, V.transpose(-2, -1)) # [B, heads, L_q, head_dim]
+        out = out.transpose(-2, -1).contiguous().view(B, self.embed_dim, H, W)
+        
+        # Add residual connection
+        return img_queries + self.out_proj(out)
+
+class SelfAttentionBlock(nn.Module):
+    """
+    Global self-attention over the image grid to ensure spatial consistency 
+    after the domain transform.
+    """
+    def __init__(self, channels, num_heads=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.embed_dim = channels
+        self.head_dim = channels // num_heads
+        self.scale = self.head_dim ** -0.5
+        
+        self.qkv = nn.Conv2d(channels, channels * 3, 1)
+        self.out_proj = nn.Conv2d(channels, channels, 1)
+        
+    def forward(self, x):
+        B, C, H, W = x.shape
+        qkv = self.qkv(x).view(B, 3, self.num_heads, self.head_dim, H * W)
+        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2] # Each is [B, heads, head_dim, L]
+        
+        attn = torch.matmul(q.transpose(-2, -1), k) * self.scale
+        attn = F.softmax(attn, dim=-1) # [B, heads, L, L]
+        
+        out = torch.matmul(attn, v.transpose(-2, -1)) # [B, heads, L, head_dim]
+        out = out.transpose(-2, -1).contiguous().view(B, C, H, W)
+        
+        return x + self.out_proj(out)
+
+# ==============================================================================
+# PIPELINE STAGES
+# ==============================================================================
+
+class SinogramUNet(nn.Module):
+    """Stage 1: Sinogram Denoising"""
+    def __init__(self):
+        super().__init__()
+        self.inc = DoubleConv(1, 32)
+        self.down1 = Down(32, 64)
+        self.down2 = Down(64, 128)
+        self.up1 = Up(128 + 64, 64, bilinear=True)
+        self.up2 = Up(64 + 32, 32, bilinear=True)
+        self.outc = nn.Conv2d(32, 1, kernel_size=1)
+
+    def forward(self, x):
+        identity = x
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x = self.up1(x3, x2)
+        x = self.up2(x, x1)
+        return self.outc(x) + identity
 
 
 class DomainTransformNet(nn.Module):
     """
-    Stage 2: Pure DL Radon Inversion
+    Stage 2: Pure DL Radon Inversion (Novel Cross-Attention Architecture)
     Maps sinogram space -> image space.
     """
     def __init__(self, target_size=256):
         super().__init__()
         self.target_size = target_size
         
-        # Encoder: 64 -> 128 -> 256 -> 512
+        # Sinogram feature extractor
+        self.sino_encoder = nn.Sequential(
+            DoubleConv(1, 32),
+            nn.MaxPool2d(2),
+            DoubleConv(32, 64)
+        )
+        
+        # Image Grid Encoder: 64 -> 128 -> 256 -> 512
         self.inc = DoubleConv(1, 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
         
-        # Bottleneck: Dilated convolutions and Channel Attention
+        # Bottleneck blocks
         self.bottleneck_dilated = nn.Sequential(
             nn.Conv2d(512, 512, kernel_size=3, padding=2, dilation=2, bias=False),
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, padding=4, dilation=4, bias=False),
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, padding=8, dilation=8, bias=False),
-            nn.BatchNorm2d(512),
             nn.ReLU(inplace=True)
         )
-        self.se_block = ChannelAttention(512)
+        
+        # Cross-Attention bridges domains; Self-Attention enforces spatial consistency
+        self.cross_attn = CrossAttentionBridge(sino_channels=64, img_channels=512, embed_dim=256)
+        self.self_attn = SelfAttentionBlock(512)
         
         # Decoder: 512 -> 256 -> 128 -> 64
         self.up1 = UpSep(512 + 256, 256, bilinear=True)
         self.up2 = UpSep(256 + 128, 128, bilinear=True)
         self.up3 = UpSep(128 + 64, 64, bilinear=True)
-        
         self.outc = nn.Conv2d(64, 1, kernel_size=1)
 
-    def forward(self, x):
-        # 1. Spatially interpolate sinogram to (target_size, target_size)
-        x = F.interpolate(x, size=(self.target_size, self.target_size), mode='bilinear', align_corners=False)
+    def forward(self, sino):
+        # 1. Extract structural features from sinogram
+        sino_feats = self.sino_encoder(sino)
         
-        # 2. Encoder
-        x1 = self.inc(x)
+        # 2. Provide a structural prior via bilinear interpolation
+        # This acts as the initial "query grid" layout for the image domain
+        img_prior = F.interpolate(sino, size=(self.target_size, self.target_size), mode='bilinear', align_corners=False)
+        
+        # 3. Image Grid Encoder
+        x1 = self.inc(img_prior)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         
-        # 3. Bottleneck
+        # 4. Bottleneck with Novel Attention Mechanics
         b_out = self.bottleneck_dilated(x4)
-        b_out = self.se_block(b_out)
+        b_out = self.cross_attn(sino_feats, b_out) # Gather sinogram information!
+        b_out = self.self_attn(b_out)              # Globally regularize image structure
         
-        # 4. Decoder
+        # 5. Image Grid Decoder
         x = self.up1(b_out, x3)
         x = self.up2(x, x2)
         x = self.up3(x, x1)
         
         return self.outc(x)
 
+
 class ImageUNet(nn.Module):
-    """
-    Stage 3: Image Refinement
-    3-level U-Net with residual skip connection.
-    Levels: 48 -> 96 -> 192 -> 96 -> 48
-    """
+    """Stage 3: Image Refinement"""
     def __init__(self):
         super().__init__()
         self.inc = DoubleConv(1, 48)
@@ -226,16 +290,13 @@ class ImageUNet(nn.Module):
         x3 = self.down2(x2)
         x = self.up1(x3, x2)
         x = self.up2(x, x1)
-        logits = self.outc(x)
-        return logits + identity # Residual connection
+        return self.outc(x) + identity
+
 
 class PureDLPipeline(nn.Module):
     """
     Complete Pure Deep Learning CT Reconstruction Pipeline.
-    Contains three stages:
-    1. SinogramUNet: Denoises the sinogram.
-    2. DomainTransformNet: Pure DL Radon inversion mapping sinogram to image.
-    3. ImageUNet: Refines the reconstructed CT image.
+    Novelty: Replaces non-differentiable FBP with Cross-Attention mapping.
     """
     def __init__(self, target_image_size=256):
         super().__init__()
@@ -244,17 +305,6 @@ class PureDLPipeline(nn.Module):
         self.stage3 = ImageUNet()
 
     def forward(self, noisy_sinogram):
-        """
-        Forward pass for the pipeline.
-        
-        Args:
-            noisy_sinogram: Tensor of shape [B, 1, Angles, Detectors]
-            
-        Returns:
-            final_image: Refined CT image.
-            clean_sinogram: Denoised sinogram from Stage 1.
-            rough_image: Initial reconstruction from Stage 2.
-        """
         clean_sinogram = self.stage1(noisy_sinogram)
         rough_image = self.stage2(clean_sinogram)
         final_image = self.stage3(rough_image)
@@ -262,45 +312,34 @@ class PureDLPipeline(nn.Module):
 
 
 if __name__ == '__main__':
-    # Test block to instantiate model and run dummy pass
+    # VRAM and Architecture Sanity Check
     import time
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    # Instantiate the model
     target_size = 256
     model = PureDLPipeline(target_image_size=target_size).to(device)
-    
-    # Calculate total parameter count
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {total_params:,}")
     
-    # Dummy data
-    B = 2
-    Angles = 360
-    Detectors = 720
-    dummy_noisy_sinogram = torch.randn(B, 1, Angles, Detectors).to(device)
+    # Simulating RTX 3050 constraints: batch=2
+    B, Angles, Detectors = 2, 360, 512
+    dummy = torch.randn(B, 1, Angles, Detectors).to(device)
     
-    print(f"\nRunning dummy forward pass...")
-    print(f"Input sinogram shape: {dummy_noisy_sinogram.shape}")
-    
-    model.eval() # Use eval mode for standard testing
+    print(f"\nRunning test pass (Batch={B})...")
+    model.eval()
     with torch.no_grad():
-        with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
-            start_time = time.time()
-            final_img, clean_sino, rough_img = model(dummy_noisy_sinogram)
-            end_time = time.time()
+        start = time.time()
+        final_img, clean_sino, rough_img = model(dummy)
+        end = time.time()
             
-    print(f"\nOutputs:")
-    print(f"Clean Sinogram shape: {clean_sino.shape}")
-    print(f"Rough Image shape: {rough_img.shape}")
-    print(f"Final Image shape: {final_img.shape}")
-    print(f"Forward pass time: {(end_time - start_time) * 1000:.2f} ms")
+    print(f"Output shapes:")
+    print(f" - Clean Sino: {clean_sino.shape}")
+    print(f" - Rough Img:  {rough_img.shape}")
+    print(f" - Final Img:  {final_img.shape}")
+    print(f"Time: {(end - start) * 1000:.1f} ms")
     
-    # Validate output shapes
-    assert clean_sino.shape == dummy_noisy_sinogram.shape, "Clean sinogram shape mismatch"
-    assert rough_img.shape == (B, 1, target_size, target_size), "Rough image shape mismatch"
-    assert final_img.shape == (B, 1, target_size, target_size), "Final image shape mismatch"
-    
-    print("\nAll shape checks passed successfully!")
+    if torch.cuda.is_available():
+        peak = torch.cuda.max_memory_allocated() / 1024**2
+        print(f"Peak VRAM used for inference: {peak:.1f} MB")

@@ -170,28 +170,28 @@ class App:
         # Epochs
         row = tk.Frame(self.train_frame); row.pack(fill=tk.X, pady=1, padx=4)
         lbl = tk.Label(row, text="Epochs", width=14, anchor="w"); lbl.pack(side=tk.LEFT)
-        ToolTip(lbl, "Number of complete passes through the training dataset.\nMore epochs = better quality but longer training time.\nRecommended: 30–50 for publishable results.")
-        self.epochs = tk.StringVar(value="30")
+        ToolTip(lbl, "Number of complete passes through the training dataset.\nRecommended: 50–100 for high quality attention-based learning.")
+        self.epochs = tk.StringVar(value="50")
         tk.Entry(row, textvariable=self.epochs, width=6).pack(side=tk.LEFT)
 
         # Batch size
         row2 = tk.Frame(self.train_frame); row2.pack(fill=tk.X, pady=1, padx=4)
         lbl2 = tk.Label(row2, text="Batch Size", width=14, anchor="w"); lbl2.pack(side=tk.LEFT)
-        ToolTip(lbl2, "Number of sinogram slices processed simultaneously.\nLarger = faster training but more GPU memory.\nReduce to 1 if you get Out-Of-Memory errors.")
+        ToolTip(lbl2, "Number of sinogram slices processed simultaneously.\nRecommended for 4GB VRAM (RTX 3050): 2")
         self.batch_size = tk.StringVar(value="2")
         tk.Entry(row2, textvariable=self.batch_size, width=6).pack(side=tk.LEFT)
 
         # Downsample
         row_res = tk.Frame(self.train_frame); row_res.pack(fill=tk.X, pady=1, padx=4)
         lbl_ds = tk.Label(row_res, text="Downsample", width=14, anchor="w"); lbl_ds.pack(side=tk.LEFT)
-        ToolTip(lbl_ds, "Factor to reduce projection resolution.\n2 = half resolution (faster), 1 = full resolution (slower).\nUse 2 for initial experiments, 1 for final training.")
+        ToolTip(lbl_ds, "Factor to reduce projection resolution.\nRecommended for 4GB VRAM: 2 (half resolution).")
         self.downsample = tk.StringVar(value="2")
         tk.Entry(row_res, textvariable=self.downsample, width=6).pack(side=tk.LEFT)
 
         # Image Size
         row_img = tk.Frame(self.train_frame); row_img.pack(fill=tk.X, pady=1, padx=4)
         lbl_img = tk.Label(row_img, text="Image Size", width=14, anchor="w"); lbl_img.pack(side=tk.LEFT)
-        ToolTip(lbl_img, "Size of the reconstructed 2D CT slice (NxN pixels).\n256 = standard, 512 = high quality (needs more VRAM).")
+        ToolTip(lbl_img, "Resolution of the reconstructed 2D CT slice (NxN pixels).\nRecommended for 4GB VRAM: 256")
         self.image_size = tk.StringVar(value="256")
         tk.Entry(row_img, textvariable=self.image_size, width=6).pack(side=tk.LEFT)
 
