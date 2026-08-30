@@ -204,7 +204,7 @@ def main():
         "epoch_logs": [],
     }
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+    scaler = torch.amp.GradScaler('cuda', enabled=(device.type == "cuda"))
 
     if args.resume_checkpoint is None:
         best_val_loss = float("inf")
@@ -219,7 +219,7 @@ def main():
             target_image = target_image.to(device)
 
             optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+            with torch.amp.autocast('cuda', enabled=(device.type == "cuda")):
                 final_image, clean_sinogram, rough_image = model(noisy_sino)
                 
                 loss_sino = l1_loss(clean_sinogram, target_sino)
@@ -253,7 +253,7 @@ def main():
                 target_sino = target_sino.to(device)
                 target_image = target_image.to(device)
 
-                with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+                with torch.amp.autocast('cuda', enabled=(device.type == "cuda")):
                     final_image, clean_sinogram, rough_image = model(noisy_sino)
                     loss_sino = l1_loss(clean_sinogram, target_sino)
                     loss_rough_image = l1_loss(rough_image, target_image)

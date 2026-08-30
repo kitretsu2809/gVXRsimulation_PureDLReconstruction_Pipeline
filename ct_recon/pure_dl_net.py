@@ -104,14 +104,13 @@ class CrossAttentionBridge(nn.Module):
     """
     Learns the inverse Radon transform by computing attention between the 
     spatial image grid (Queries) and the sinogram measurements (Keys/Values).
-    Replaces non-differentiable analytical FBP with a pure DL approach.
+    Uses PyTorch FlashAttention / Scaled Dot-Product Attention for O(1) memory.
     """
     def __init__(self, sino_channels, img_channels, embed_dim=256, num_heads=4):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
-        self.scale = self.head_dim ** -0.5
         
         self.query_proj = nn.Conv2d(img_channels, embed_dim, 1)
         self.key_proj = nn.Conv2d(sino_channels, embed_dim, 1)
@@ -122,61 +121,40 @@ class CrossAttentionBridge(nn.Module):
         self.sino_pool = nn.AdaptiveAvgPool2d((30, 32))
         
     def forward(self, sino_features, img_queries):
-        # Pool sinogram to keep VRAM strictly under limits
-        # shape: [B, C_s, 30, 32] -> L_s = 960 tokens
+        # Pool sinogram: [B, C_s, 30, 32] -> 960 tokens
         sino_pooled = self.sino_pool(sino_features)
         
         B, C_i, H, W = img_queries.shape
         _, C_s, A_p, D_p = sino_pooled.shape
-        L_q = H * W
-        L_s = A_p * D_p
         
-        # Projections
-        Q = self.query_proj(img_queries).view(B, self.num_heads, self.head_dim, L_q)
-        K = self.key_proj(sino_pooled).view(B, self.num_heads, self.head_dim, L_s)
-        V = self.value_proj(sino_pooled).view(B, self.num_heads, self.head_dim, L_s)
+        # Projections reshaped for FlashAttention: [B, heads, seq_len, head_dim]
+        Q = self.query_proj(img_queries).view(B, self.num_heads, self.head_dim, H * W).transpose(-2, -1)
+        K = self.key_proj(sino_pooled).view(B, self.num_heads, self.head_dim, A_p * D_p).transpose(-2, -1)
+        V = self.value_proj(sino_pooled).view(B, self.num_heads, self.head_dim, A_p * D_p).transpose(-2, -1)
         
-        # Cross-Attention: Q * K^T
-        # Q transposed: [B, heads, L_q, head_dim]
-        # K: [B, heads, head_dim, L_s]
-        attn = torch.matmul(Q.transpose(-2, -1), K) * self.scale
-        attn = F.softmax(attn, dim=-1) # [B, heads, L_q, L_s]
-        
-        # Output: Attn * V^T
-        # V transposed: [B, heads, L_s, head_dim]
-        out = torch.matmul(attn, V.transpose(-2, -1)) # [B, heads, L_q, head_dim]
+        # Memory-efficient Scaled Dot-Product Attention (FlashAttention)
+        out = F.scaled_dot_product_attention(Q, K, V)
         out = out.transpose(-2, -1).contiguous().view(B, self.embed_dim, H, W)
         
-        # Add residual connection
         return img_queries + self.out_proj(out)
 
-class SelfAttentionBlock(nn.Module):
-    """
-    Global self-attention over the image grid to ensure spatial consistency 
-    after the domain transform.
-    """
-    def __init__(self, channels, num_heads=4):
+class ChannelAttention(nn.Module):
+    """Squeeze-and-Excitation (SE) block for global channel-wise feature re-weighting."""
+    def __init__(self, channels, reduction=16):
         super().__init__()
-        self.num_heads = num_heads
-        self.embed_dim = channels
-        self.head_dim = channels // num_heads
-        self.scale = self.head_dim ** -0.5
-        
-        self.qkv = nn.Conv2d(channels, channels * 3, 1)
-        self.out_proj = nn.Conv2d(channels, channels, 1)
-        
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid()
+        )
+
     def forward(self, x):
-        B, C, H, W = x.shape
-        qkv = self.qkv(x).view(B, 3, self.num_heads, self.head_dim, H * W)
-        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2] # Each is [B, heads, head_dim, L]
-        
-        attn = torch.matmul(q.transpose(-2, -1), k) * self.scale
-        attn = F.softmax(attn, dim=-1) # [B, heads, L, L]
-        
-        out = torch.matmul(attn, v.transpose(-2, -1)) # [B, heads, L, head_dim]
-        out = out.transpose(-2, -1).contiguous().view(B, C, H, W)
-        
-        return x + self.out_proj(out)
+        b, c, _, _ = x.shape
+        y = self.pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
 
 # ==============================================================================
 # PIPELINE STAGES
@@ -235,9 +213,9 @@ class DomainTransformNet(nn.Module):
             nn.ReLU(inplace=True)
         )
         
-        # Cross-Attention bridges domains; Self-Attention enforces spatial consistency
+        # Cross-Attention bridges domains; SE block refines channel dependencies
         self.cross_attn = CrossAttentionBridge(sino_channels=64, img_channels=512, embed_dim=256)
-        self.self_attn = SelfAttentionBlock(512)
+        self.se_block = ChannelAttention(512)
         
         # Decoder: 512 -> 256 -> 128 -> 64
         self.up1 = UpSep(512 + 256, 256, bilinear=True)
@@ -250,7 +228,6 @@ class DomainTransformNet(nn.Module):
         sino_feats = self.sino_encoder(sino)
         
         # 2. Provide a structural prior via bilinear interpolation
-        # This acts as the initial "query grid" layout for the image domain
         img_prior = F.interpolate(sino, size=(self.target_size, self.target_size), mode='bilinear', align_corners=False)
         
         # 3. Image Grid Encoder
@@ -259,10 +236,10 @@ class DomainTransformNet(nn.Module):
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         
-        # 4. Bottleneck with Novel Attention Mechanics
+        # 4. Bottleneck with Cross-Attention + Squeeze-and-Excitation
         b_out = self.bottleneck_dilated(x4)
         b_out = self.cross_attn(sino_feats, b_out) # Gather sinogram information!
-        b_out = self.self_attn(b_out)              # Globally regularize image structure
+        b_out = self.se_block(b_out)                # Squeeze-and-Excitation channel gating
         
         # 5. Image Grid Decoder
         x = self.up1(b_out, x3)
