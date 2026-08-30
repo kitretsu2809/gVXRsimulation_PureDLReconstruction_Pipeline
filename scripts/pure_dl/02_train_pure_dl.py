@@ -204,6 +204,8 @@ def main():
         "epoch_logs": [],
     }
 
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+
     if args.resume_checkpoint is None:
         best_val_loss = float("inf")
     for epoch in range(1, args.epochs + 1):
@@ -216,20 +218,23 @@ def main():
             target_sino = target_sino.to(device)
             target_image = target_image.to(device)
 
-            final_image, clean_sinogram, rough_image = model(noisy_sino)
-            
-            loss_sino = l1_loss(clean_sinogram, target_sino)
-            loss_rough_image = l1_loss(rough_image, target_image)
-            loss_final_image = l1_loss(final_image, target_image)
-            loss_edge = compute_sobel_loss(final_image, target_image, F)
-            
-            # Weighting: 0.4*final + 0.4*edge forces high-frequency edge sharpness
-            total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
-
             optimizer.zero_grad(set_to_none=True)
-            total_loss.backward()
+            with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+                final_image, clean_sinogram, rough_image = model(noisy_sino)
+                
+                loss_sino = l1_loss(clean_sinogram, target_sino)
+                loss_rough_image = l1_loss(rough_image, target_image)
+                loss_final_image = l1_loss(final_image, target_image)
+                loss_edge = compute_sobel_loss(final_image, target_image, F)
+                
+                # Weighting: 0.4*final + 0.4*edge forces high-frequency edge sharpness
+                total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
+
+            scaler.scale(total_loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             train_losses.append(float(total_loss.item()))
             
             # Print batch-level progress immediately
@@ -248,15 +253,15 @@ def main():
                 target_sino = target_sino.to(device)
                 target_image = target_image.to(device)
 
-                final_image, clean_sinogram, rough_image = model(noisy_sino)
-                
-                loss_sino = l1_loss(clean_sinogram, target_sino)
-                loss_rough_image = l1_loss(rough_image, target_image)
-                loss_final_image = l1_loss(final_image, target_image)
-                loss_edge = compute_sobel_loss(final_image, target_image, F)
-                total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
-                
+                with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+                    final_image, clean_sinogram, rough_image = model(noisy_sino)
+                    loss_sino = l1_loss(clean_sinogram, target_sino)
+                    loss_rough_image = l1_loss(rough_image, target_image)
+                    loss_final_image = l1_loss(final_image, target_image)
+                    loss_edge = compute_sobel_loss(final_image, target_image, F)
+                    total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
                 val_losses.append(float(total_loss.item()))
+
 
                 predictions_np = final_image.detach().cpu().numpy()
                 targets_np = target_image.detach().cpu().numpy()

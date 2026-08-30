@@ -72,8 +72,9 @@ def main():
                 sys.executable, str(build_script),
                 "--sample-dir", str(dataset_path),
                 "--target-volume", str(fdk_vol_path),
-                "--image-size", "1024",
+                "--image-size", "256",
                 "--downsample-factor", str(args.downsample),
+                "--slice-stride", "5",
                 "--output-path", str(npz_out_path),
                 "--sparse-step", str(args.sparse_step)
             ]

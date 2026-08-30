@@ -1,8 +1,36 @@
+# Large Data & Outputs
 data/
+outputs/
 paper/
 configs/
-outputs/
 scratch/
+*.npz
+*.zip
+*.tar
+*.tar.gz
+
+# Python & Environment
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# LaTeX build temp files
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# OS & Editor
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+aws-agent-rules.md
