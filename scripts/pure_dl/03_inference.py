@@ -55,7 +55,16 @@ def main():
     target_image_size = metadata["image_size"]
     print(f"Initializing PureDLPipeline for {target_image_size}x{target_image_size} inference...")
     model = PureDLPipeline(target_image_size=target_image_size)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    try:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    except RuntimeError as e:
+        print("\n" + "="*70)
+        print("❌ CHECKPOINT MISMATCH ERROR:")
+        print("The selected .pt file is from an OLD version of the model architecture!")
+        print("Please download the NEW 'best_model_centered.pt' (~58 MB) trained on Kaggle")
+        print("and select that file in the GUI.")
+        print("="*70 + "\n")
+        raise e
     model.to(device)
     model.eval()
 
