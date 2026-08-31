@@ -70,6 +70,22 @@ def main():
 
     # 3. Load Raw Data
     sample_dir = resolve_repo_path(args.sample_dir)
+    if not (sample_dir / "settings.cto").exists():
+        valid_subdirs = [p for p in sample_dir.iterdir() if p.is_dir() and (p / "settings.cto").exists()]
+        if len(valid_subdirs) == 1:
+            print(f"ℹ️ Auto-selected sample folder inside '{sample_dir.name}': {valid_subdirs[0].name}")
+            sample_dir = valid_subdirs[0]
+        elif len(valid_subdirs) > 1:
+            print("\n" + "="*70)
+            print(f"❌ '{sample_dir.name}' is a parent directory containing {len(valid_subdirs)} samples:")
+            for s in valid_subdirs:
+                print(f"   • {s.name}")
+            print(f"Please select one of the specific folders above in the GUI.")
+            print("="*70 + "\n")
+            raise FileNotFoundError(f"Missing settings.cto in '{sample_dir}'. Please select a specific sample subfolder (e.g. data/{valid_subdirs[0].name}).")
+        else:
+            raise FileNotFoundError(f"Missing settings file: {sample_dir / 'settings.cto'}")
+
     print(f"Loading raw projections from: {sample_dir}")
     sample = load_sample(sample_dir)
     geometry = parse_geometry(sample_dir / "settings.cto")
