@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--target-volume", default=None, help="Optional path to a high-quality target volume.")
     parser.add_argument("--output-path", default=str(OUTPUTS_DIR / "sparse_sinogram_dataset.npz"))
     parser.add_argument("--downsample-factor", type=int, default=2)
-    parser.add_argument("--sparse-step", type=int, default=4, help="Keep every Nth projection for the sparse input.")
+    parser.add_argument("--sparse-step", type=int, default=1, help="Keep every Nth projection for the sparse input. Default=1 means full-angle (dense) reconstruction.")
     parser.add_argument("--detector-count", type=int, default=256)
     parser.add_argument("--image-size", type=int, default=256)
     parser.add_argument("--slice-stride", type=int, default=1, help="Keep every Nth slice from the target volume.")
