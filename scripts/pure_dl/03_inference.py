@@ -143,9 +143,8 @@ def main():
         with torch.no_grad():
             final_image, _, _ = model(batch_tensor)
             
-        # Denormalize output
-        predictions = final_image.squeeze(1).cpu().numpy()
-        predictions = (predictions * image_scale) + metadata["image_min"]
+        # Predictions are directly in the [0, 1] normalized density space
+        predictions = np.clip(final_image.squeeze(1).cpu().numpy(), 0.0, 1.0)
         
         # Save to volume
         for b_idx, vol_idx in enumerate(idxs):
