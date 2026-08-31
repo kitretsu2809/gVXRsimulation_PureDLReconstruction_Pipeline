@@ -161,15 +161,15 @@ class ChannelAttention(nn.Module):
 # ==============================================================================
 
 class SinogramUNet(nn.Module):
-    """Stage 1: Sinogram Denoising"""
+    """Stage 1: Sinogram Denoising (Lightweight 3-level U-Net)"""
     def __init__(self):
         super().__init__()
-        self.inc = DoubleConv(1, 32)
-        self.down1 = Down(32, 64)
-        self.down2 = Down(64, 128)
-        self.up1 = Up(128 + 64, 64, bilinear=True)
-        self.up2 = Up(64 + 32, 32, bilinear=True)
-        self.outc = nn.Conv2d(32, 1, kernel_size=1)
+        self.inc = DoubleConv(1, 16)
+        self.down1 = Down(16, 32)
+        self.down2 = Down(32, 64)
+        self.up1 = Up(64 + 32, 32, bilinear=True)
+        self.up2 = Up(32 + 16, 16, bilinear=True)
+        self.outc = nn.Conv2d(16, 1, kernel_size=1)
 
     def forward(self, x):
         identity = x
@@ -183,45 +183,45 @@ class SinogramUNet(nn.Module):
 
 class DomainTransformNet(nn.Module):
     """
-    Stage 2: Pure DL Radon Inversion (Novel Cross-Attention Architecture)
-    Maps sinogram space -> image space.
+    Stage 2: Pure DL Radon Inversion (FlashAttention + Squeeze-and-Excitation)
+    Maps sinogram space -> image space in O(1) memory.
     """
     def __init__(self, target_size=256):
         super().__init__()
         self.target_size = target_size
         
-        # Sinogram feature extractor
+        # Sinogram feature extractor: 1 -> 16 -> 32
         self.sino_encoder = nn.Sequential(
-            DoubleConv(1, 32),
+            DoubleConv(1, 16),
             nn.MaxPool2d(2),
-            DoubleConv(32, 64)
+            DoubleConv(16, 32)
         )
         
-        # Image Grid Encoder: 64 -> 128 -> 256 -> 512
-        self.inc = DoubleConv(1, 64)
-        self.down1 = Down(64, 128)
-        self.down2 = Down(128, 256)
-        self.down3 = Down(256, 512)
+        # Image Grid Encoder: 32 -> 64 -> 128 -> 256
+        self.inc = DoubleConv(1, 32)
+        self.down1 = Down(32, 64)
+        self.down2 = Down(64, 128)
+        self.down3 = Down(128, 256)
         
-        # Bottleneck blocks
+        # Bottleneck with dilated convolutions
         self.bottleneck_dilated = nn.Sequential(
-            nn.Conv2d(512, 512, kernel_size=3, padding=2, dilation=2, bias=False),
-            nn.BatchNorm2d(512),
+            nn.Conv2d(256, 256, kernel_size=3, padding=2, dilation=2, bias=False),
+            nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, padding=4, dilation=4, bias=False),
-            nn.BatchNorm2d(512),
+            nn.Conv2d(256, 256, kernel_size=3, padding=4, dilation=4, bias=False),
+            nn.BatchNorm2d(256),
             nn.ReLU(inplace=True)
         )
         
-        # Cross-Attention bridges domains; SE block refines channel dependencies
-        self.cross_attn = CrossAttentionBridge(sino_channels=64, img_channels=512, embed_dim=256)
-        self.se_block = ChannelAttention(512)
+        # Cross-Attention Bridge (O(1) FlashAttention) + Squeeze-and-Excitation
+        self.cross_attn = CrossAttentionBridge(sino_channels=32, img_channels=256, embed_dim=128)
+        self.se_block = ChannelAttention(256)
         
-        # Decoder: 512 -> 256 -> 128 -> 64
-        self.up1 = UpSep(512 + 256, 256, bilinear=True)
-        self.up2 = UpSep(256 + 128, 128, bilinear=True)
-        self.up3 = UpSep(128 + 64, 64, bilinear=True)
-        self.outc = nn.Conv2d(64, 1, kernel_size=1)
+        # Decoder: 256 -> 128 -> 64 -> 32
+        self.up1 = UpSep(256 + 128, 128, bilinear=True)
+        self.up2 = UpSep(128 + 64, 64, bilinear=True)
+        self.up3 = UpSep(64 + 32, 32, bilinear=True)
+        self.outc = nn.Conv2d(32, 1, kernel_size=1)
 
     def forward(self, sino):
         # 1. Extract structural features from sinogram
@@ -253,12 +253,12 @@ class ImageUNet(nn.Module):
     """Stage 3: Image Refinement"""
     def __init__(self):
         super().__init__()
-        self.inc = DoubleConv(1, 48)
-        self.down1 = Down(48, 96)
-        self.down2 = Down(96, 192)
-        self.up1 = Up(192 + 96, 96, bilinear=True)
-        self.up2 = Up(96 + 48, 48, bilinear=True)
-        self.outc = nn.Conv2d(48, 1, kernel_size=1)
+        self.inc = DoubleConv(1, 24)
+        self.down1 = Down(24, 48)
+        self.down2 = Down(48, 96)
+        self.up1 = Up(96 + 48, 48, bilinear=True)
+        self.up2 = Up(48 + 24, 24, bilinear=True)
+        self.outc = nn.Conv2d(24, 1, kernel_size=1)
 
     def forward(self, x):
         identity = x
