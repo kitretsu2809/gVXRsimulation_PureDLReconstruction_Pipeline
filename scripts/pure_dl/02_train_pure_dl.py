@@ -1,3 +1,6 @@
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 from __future__ import annotations
 
 import argparse
@@ -54,13 +57,9 @@ def main():
             import torch.nn.functional as F
             
             sample_idx = self.indices[index]
-            # np.ascontiguousarray copies ONE sample from the mmap'd array into RAM
-            # as a small contiguous float32 block. This is the only moment data
-            # physically moves from disk to RAM — one sample at a time, not the
-            # whole file. (~1 MB per sample vs potentially GBs for the full array)
             noisy_sinogram  = torch.from_numpy(
                 np.ascontiguousarray(self.input_sinograms[sample_idx],  dtype=np.float32)
-            ).unsqueeze(0)   # add channel dim: (H, W) -> (1, H, W)
+            ).unsqueeze(0)
             target_sinogram = torch.from_numpy(
                 np.ascontiguousarray(self.target_sinograms[sample_idx], dtype=np.float32)
             ).unsqueeze(0)
@@ -68,7 +67,6 @@ def main():
                 np.ascontiguousarray(self.target_images[sample_idx],    dtype=np.float32)
             ).unsqueeze(0)
             
-            # Interpolate the sparse sinogram to the dense shape so the network can repair it
             if noisy_sinogram.shape != target_sinogram.shape:
                 noisy_sinogram = F.interpolate(
                     noisy_sinogram.unsqueeze(0), 
@@ -84,7 +82,8 @@ def main():
     parser.add_argument("--output-dir", default=str(OUTPUTS_DIR / "pure_dl_training"))
     parser.add_argument("--scan-method", type=str, choices=['centered', 'offset'], default='centered', help="Scan geometry type to train on.")
     parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=2) # Dual-domain uses more memory
+    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--accum-steps", type=int, default=4, help="Gradient accumulation steps (effective batch size = batch_size * accum_steps).")
     parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate. Use a smaller value (e.g. 1e-4) when resuming.")
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=0)
@@ -97,7 +96,6 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    # Dynamically adjust default paths based on the scan method if they weren't overridden
     dataset_path = resolve_repo_path(args.dataset_path)
     if dataset_path.is_file() and dataset_path.name == "sparse_sinogram_dataset.npz":
         dataset_path = dataset_path.parent / f"sparse_sinogram_dataset_{args.scan_method}.npz"
@@ -106,7 +104,6 @@ def main():
     if output_dir.name == "pure_dl_training":
         output_dir = output_dir.parent / f"pure_dl_training_{args.scan_method}"
 
-    # Handle single file vs directory of batch npz files
     npz_files = []
     if dataset_path.is_dir():
         npz_files = list(dataset_path.glob("*.npz"))
@@ -125,16 +122,12 @@ def main():
         print(f"Loading {npz_file.name}...")
         input_sinograms, target_sinograms, target_images, meta = load_sparse_dataset(npz_file)
         if metadata is None:
-            metadata = meta # Use first file's metadata for network architecture sizing
-        # Determine target image size from metadata if available, otherwise infer from data
+            metadata = meta
         if observed_target_size is None:
             if meta is not None and hasattr(meta, "image_size") and meta.image_size is not None:
                 observed_target_size = meta.image_size
             else:
-                # target_images shape: (N, H, W) or (N, 1, H, W) depending on loader; handle both
-                if target_images.ndim == 4:
-                    observed_target_size = target_images.shape[-1]
-                elif target_images.ndim == 3:
+                if target_images.ndim in (3, 4):
                     observed_target_size = target_images.shape[-1]
                 else:
                     raise ValueError("Unable to infer target image size from dataset")
@@ -150,9 +143,10 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    effective_bs = args.batch_size * args.accum_steps
+    print(f"Device: {device} | Physical Batch Size: {args.batch_size} | Accumulation Steps: {args.accum_steps} (Effective Batch Size: {effective_bs})")
     
     print("Initializing PureDLPipeline...")
-    # Get image size from metadata (assuming square reconstruction grid) or fall back to observed size
     if metadata is not None and hasattr(metadata, "image_size") and metadata.image_size is not None:
         target_size = metadata.image_size
     elif observed_target_size is not None:
@@ -164,26 +158,27 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     l1_loss = nn.L1Loss()
 
-    # --- Resume from checkpoint if requested ---
     start_epoch = 1
     if args.resume_checkpoint is not None:
         ckpt_path = resolve_repo_path(args.resume_checkpoint)
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Resume checkpoint not found: {ckpt_path}")
-        print(f"Resuming from checkpoint: {ckpt_path}")
+        print(f"Loading checkpoint for resume: {ckpt_path}")
         checkpoint = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
         if "optimizer_state_dict" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            print("Restored optimizer state from checkpoint.")
         if "scheduler_state_dict" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        # Restore best val loss so the model only gets overwritten if it genuinely improves
+            print("Restored scheduler state from checkpoint.")
+        start_epoch = checkpoint.get("epoch", 0) + 1
         prev_history = checkpoint.get("history", {})
         prev_logs = prev_history.get("epoch_logs", [])
         if prev_logs:
             best_val_loss = min(log["val_loss"] for log in prev_logs)
             print(f"Restored best_val_loss from checkpoint: {best_val_loss:.6f}")
-        print(f"Checkpoint was saved at epoch {checkpoint.get('epoch', '?')}. Starting fresh epoch counter.")
+        print(f"Checkpoint was saved at epoch {checkpoint.get('epoch', '?')}. Starting from epoch {start_epoch}.")
 
     output_dir = resolve_repo_path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -196,6 +191,7 @@ def main():
         "scan_method": args.scan_method,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
+        "effective_batch_size": effective_bs,
         "learning_rate": args.learning_rate,
         "train_samples": len(train_dataset),
         "val_samples": len(val_dataset),
@@ -206,19 +202,17 @@ def main():
 
     scaler = torch.amp.GradScaler('cuda', enabled=(device.type == "cuda"))
 
-    if args.resume_checkpoint is None:
-        best_val_loss = float("inf")
-    for epoch in range(1, args.epochs + 1):
+    best_val_loss = float("inf")
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         train_losses = []
+        optimizer.zero_grad(set_to_none=True)
 
-        # Enumerate train_loader to log batch-level progress
         for batch_idx, (noisy_sino, target_sino, target_image) in enumerate(train_loader):
             noisy_sino = noisy_sino.to(device)
             target_sino = target_sino.to(device)
             target_image = target_image.to(device)
 
-            optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast('cuda', enabled=(device.type == "cuda")):
                 final_image, clean_sinogram, rough_image = model(noisy_sino)
                 
@@ -227,19 +221,22 @@ def main():
                 loss_final_image = l1_loss(final_image, target_image)
                 loss_edge = compute_sobel_loss(final_image, target_image, F)
                 
-                # Weighting: 0.4*final + 0.4*edge forces high-frequency edge sharpness
-                total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
+                raw_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
+                loss_accum = raw_loss / args.accum_steps
 
-            scaler.scale(total_loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-            train_losses.append(float(total_loss.item()))
+            scaler.scale(loss_accum).backward()
+
+            if (batch_idx + 1) % args.accum_steps == 0 or (batch_idx + 1) == len(train_loader):
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+
+            train_losses.append(float(raw_loss.item()))
             
-            # Print batch-level progress immediately
             print(
-                f"Epoch {epoch}/{args.epochs} | Batch {batch_idx + 1}/{len(train_loader)} | Loss: {total_loss.item():.4f}",
+                f"Epoch {epoch}/{args.epochs} | Batch {batch_idx + 1}/{len(train_loader)} | Loss: {raw_loss.item():.4f}",
                 end="\r",
                 flush=True,
             )
