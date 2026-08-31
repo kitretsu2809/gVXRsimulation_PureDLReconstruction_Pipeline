@@ -195,8 +195,8 @@ class DifferentiableFBP(nn.Module):
         self.target_size = target_size
         coords = torch.linspace(-1.0, 1.0, target_size)
         y, x = torch.meshgrid(coords, coords, indexing='ij')
-        self.register_buffer("x_grid", x.unsqueeze(0))
-        self.register_buffer("y_grid", y.unsqueeze(0))
+        self.register_buffer("x_grid", x.unsqueeze(0).contiguous().clone(), persistent=False)
+        self.register_buffer("y_grid", y.unsqueeze(0).contiguous().clone(), persistent=False)
 
     def forward(self, sino, angles_rad=None):
         B, C, N_angles, N_det = sino.shape
