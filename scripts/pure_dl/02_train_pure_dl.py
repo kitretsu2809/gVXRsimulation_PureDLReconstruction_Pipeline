@@ -29,6 +29,28 @@ def compute_sobel_loss(pred, target, torch_F):
 
     return torch_F.l1_loss(pred_gx, target_gx) + torch_F.l1_loss(pred_gy, target_gy)
 
+def compute_ssim_loss(pred, target, torch_F, window_size=11):
+    def gaussian(w_size, sigma):
+        gauss = torch_F.softmax(
+            -((torch_F.pad(pred.new_empty(0), (0, w_size)).new_tensor([x - w_size//2 for x in range(w_size)]))**2) / (2.0 * sigma**2),
+            dim=0
+        )
+        return gauss
+    _1D = torch_F.softmax(-((pred.new_tensor([x - window_size//2 for x in range(window_size)]))**2) / (2.0 * 1.5**2), dim=0).unsqueeze(1)
+    _2D = _1D.mm(_1D.t()).unsqueeze(0).unsqueeze(0)
+    window = _2D.expand(1, 1, window_size, window_size).contiguous()
+    
+    mu1 = torch_F.conv2d(pred, window, padding=window_size//2, groups=1)
+    mu2 = torch_F.conv2d(target, window, padding=window_size//2, groups=1)
+    mu1_sq, mu2_sq, mu1_mu2 = mu1.pow(2), mu2.pow(2), mu1 * mu2
+    sigma1_sq = torch_F.conv2d(pred * pred, window, padding=window_size//2, groups=1) - mu1_sq
+    sigma2_sq = torch_F.conv2d(target * target, window, padding=window_size//2, groups=1) - mu2_sq
+    sigma12 = torch_F.conv2d(pred * target, window, padding=window_size//2, groups=1) - mu1_mu2
+    
+    C1, C2 = 0.01**2, 0.03**2
+    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2) + 1e-8)
+    return 1.0 - ssim_map.mean()
+
 def split_indices(count: int, val_fraction: float, seed: int) -> tuple[list[int], list[int]]:
     indices = list(range(count))
     rng = random.Random(seed)
@@ -149,7 +171,7 @@ def main():
         metadata.image_size = target_size
 
     model = PureDLPipeline(target_image_size=target_size).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     l1_loss = nn.L1Loss()
 
@@ -215,8 +237,10 @@ def main():
                 loss_rough_image = l1_loss(rough_image, target_image)
                 loss_final_image = l1_loss(final_image, target_image)
                 loss_edge = compute_sobel_loss(final_image, target_image, F)
+                loss_ssim = compute_ssim_loss(final_image, target_image, F)
                 
-                raw_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
+                # Multi-Scale Gold Standard Loss: L1 + Sobel Edge Loss + SSIM Structural Similarity
+                raw_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.3 * loss_final_image + 0.25 * loss_edge + 0.25 * loss_ssim
                 loss_accum = raw_loss / args.accum_steps
 
             scaler.scale(loss_accum).backward()
@@ -251,7 +275,8 @@ def main():
                     loss_rough_image = l1_loss(rough_image, target_image)
                     loss_final_image = l1_loss(final_image, target_image)
                     loss_edge = compute_sobel_loss(final_image, target_image, F)
-                    total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
+                    loss_ssim = compute_ssim_loss(final_image, target_image, F)
+                    total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.3 * loss_final_image + 0.25 * loss_edge + 0.25 * loss_ssim
                 val_losses.append(float(total_loss.item()))
 
 
