@@ -229,6 +229,13 @@ interpolate = FALSE
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate realistic CT projections using gVXR.")
+    parser.add_argument("pos_stl", nargs="?", default=None, help="Path to input STL (positional).")
+    parser.add_argument("pos_output_dir", nargs="?", default=None, help="Output directory (positional).")
+    parser.add_argument("pos_material", nargs="?", default=None, help="Material (positional).")
+    parser.add_argument("pos_i0", nargs="?", type=float, default=None, help="Initial photon count (positional).")
+    parser.add_argument("pos_gaussian_std", nargs="?", type=float, default=None, help="Gaussian noise std (positional).")
+    parser.add_argument("pos_scan_method", nargs="?", default=None, help="Scan method (positional).")
+
     parser.add_argument("--stl", type=str, default="STL/FINAL30.stl", help="Path to input STL.")
     parser.add_argument("--output_dir", type=str, default="gvxr_projections_tiff", help="Output directory.")
     parser.add_argument("--material", type=str, default="Ti", help="Material of the object (e.g. Ti, Al, Fe).")
@@ -237,4 +244,11 @@ if __name__ == "__main__":
     parser.add_argument("--gaussian-std", type=float, default=10.0, help="Gaussian noise standard deviation.")
     args = parser.parse_args()
 
-    run_gvxr_pipeline(args.stl, args.output_dir, args.material, i0=args.i0, gaussian_std=args.gaussian_std, scan_method=args.scan_method)
+    stl = args.pos_stl if args.pos_stl is not None else args.stl
+    output_dir = args.pos_output_dir if args.pos_output_dir is not None else args.output_dir
+    material = args.pos_material if args.pos_material is not None else args.material
+    i0 = args.pos_i0 if args.pos_i0 is not None else args.i0
+    gaussian_std = args.pos_gaussian_std if args.pos_gaussian_std is not None else args.gaussian_std
+    scan_method = args.pos_scan_method if args.pos_scan_method is not None else args.scan_method
+
+    run_gvxr_pipeline(stl, output_dir, material, i0=i0, gaussian_std=gaussian_std, scan_method=scan_method)
