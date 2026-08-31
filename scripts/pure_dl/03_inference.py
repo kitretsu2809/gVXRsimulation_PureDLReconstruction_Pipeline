@@ -103,6 +103,11 @@ def main():
     dense_angle_count = int(attenuation.shape[0])
     sparse_indices = np.arange(0, dense_angle_count, metadata["sparse_step"], dtype=np.int32)
     
+    sino_scale = float(np.percentile(attenuation, 99.9))
+    if sino_scale <= 0:
+        sino_scale = float(attenuation.max()) if attenuation.max() > 0 else 1.0
+    print(f"Calculated sample dynamic sinogram scale: {sino_scale:.4f}")
+    
     row_start, row_stop = compute_row_range(geometry.zmin, geometry.zmax, metadata["downsample_factor"])
     
     # Check boundaries
@@ -116,8 +121,6 @@ def main():
     # 4. Prepare Output Volume Array
     output_volume = np.zeros((num_slices, target_image_size, target_image_size), dtype=np.float32)
     
-    image_scale = max(metadata["image_max"] - metadata["image_min"], 1e-6)
-    
     # 5. Run Inference Slice-by-Slice in Batches
     batch_sinograms = []
     batch_indices = []
@@ -128,9 +131,6 @@ def main():
         # Stack to batch tensor [B, 1, Angles, Detectors]
         batch_tensor = torch.tensor(np.stack(sinos, axis=0)).unsqueeze(1).to(device)
         
-        # The network might expect the interpolated dense shape?
-        # Let's check 02_train_pure_dl.py behavior. Wait, PureDLPipeline consumes whatever shape is passed, 
-        # but in training we interpolated the sparse sinogram to match the dense sinogram target size!
         dense_shape = (dense_angle_count, metadata["detector_count"])
         if batch_tensor.shape[2:] != dense_shape:
             batch_tensor = F.interpolate(
@@ -160,8 +160,8 @@ def main():
         # Resize it exactly as training did
         sparse_sinogram_resized = resize_2d_array(sparse_sinogram, (len(sparse_indices), metadata["detector_count"]))
         
-        # Normalize
-        normalized_sino = np.clip(sparse_sinogram_resized / metadata["sinogram_scale"], 0.0, 1.0).astype(np.float32)
+        # Normalize with sample-specific dynamic scale
+        normalized_sino = np.clip(sparse_sinogram_resized / sino_scale, 0.0, 1.0).astype(np.float32)
         
         batch_sinograms.append(normalized_sino)
         batch_indices.append(vol_idx)
