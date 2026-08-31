@@ -85,11 +85,13 @@ def export_volume_to_cad(
         target_faces = int(len(mesh.faces) * decimate_fraction)
         print(f"Decimating mesh to {target_faces} faces ({decimate_fraction*100:.1f}%)...")
         try:
-            # trimesh uses quadric edge collapse if a supported backend (like open3d) is available
-            mesh = mesh.simplify_quadratic_decimation(target_faces)
+            if hasattr(mesh, "simplify_quadric_decimation"):
+                mesh = mesh.simplify_quadric_decimation(target_faces)
+            elif hasattr(mesh, "simplify_quadratic_decimation"):
+                mesh = mesh.simplify_quadratic_decimation(target_faces)
             print(f"Decimated mesh now has {len(mesh.faces)} faces.")
         except Exception as e:
-            warnings.warn(f"Mesh decimation failed (backend may be missing): {e}. Skipping decimation.")
+            warnings.warn(f"Mesh decimation skipped ({e}). Keeping full-resolution mesh.")
 
     # Export to STL
     if output_stl_path:
