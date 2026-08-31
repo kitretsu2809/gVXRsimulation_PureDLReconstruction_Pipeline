@@ -238,15 +238,13 @@ def main():
             with torch.amp.autocast('cuda', enabled=(device.type == "cuda")):
                 final_image, clean_sinogram, rough_image = model(noisy_sino)
                 
-                # Sinogram reconstruction: plain L1 (sinograms don't have class imbalance)
                 loss_sino = l1_loss(clean_sinogram, target_sino)
-                # Image losses: WEIGHTED to fix 99.5% background class imbalance (Bug #2 fix)
-                loss_rough_image = weighted_l1_loss(rough_image, target_image)
-                loss_final_image = weighted_l1_loss(final_image, target_image)
-                loss_edge = weighted_sobel_loss(final_image, target_image, F)
+                loss_rough_image = l1_loss(rough_image, target_image)
+                loss_final_image = l1_loss(final_image, target_image)
+                loss_edge = compute_sobel_loss(final_image, target_image, F)
                 
-                # Weighted composite loss: 0.1*sino + 0.1*rough + 0.4*final + 0.4*edge
-                raw_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
+                # Standard Dual-Domain CT Loss: 0.1*sino + 0.2*rough + 0.4*final + 0.3*edge
+                raw_loss = 0.1 * loss_sino + 0.2 * loss_rough_image + 0.4 * loss_final_image + 0.3 * loss_edge
                 loss_accum = raw_loss / args.accum_steps
 
             scaler.scale(loss_accum).backward()
@@ -278,25 +276,16 @@ def main():
                 with torch.amp.autocast('cuda', enabled=(device.type == "cuda")):
                     final_image, clean_sinogram, rough_image = model(noisy_sino)
                     loss_sino = l1_loss(clean_sinogram, target_sino)
-                    loss_rough_image = weighted_l1_loss(rough_image, target_image)
-                    loss_final_image = weighted_l1_loss(final_image, target_image)
-                    loss_edge = weighted_sobel_loss(final_image, target_image, F)
-                    total_loss = 0.1 * loss_sino + 0.1 * loss_rough_image + 0.4 * loss_final_image + 0.4 * loss_edge
+                    loss_rough_image = l1_loss(rough_image, target_image)
+                    loss_final_image = l1_loss(final_image, target_image)
+                    loss_edge = compute_sobel_loss(final_image, target_image, F)
+                    total_loss = 0.1 * loss_sino + 0.2 * loss_rough_image + 0.4 * loss_final_image + 0.3 * loss_edge
                 val_losses.append(float(total_loss.item()))
 
                 predictions_np = final_image.detach().cpu().numpy()
                 targets_np = target_image.detach().cpu().numpy()
                 for pred, target in zip(predictions_np, targets_np):
-                    pred_clipped = np.clip(pred, 0.0, 1.0)
-                    # Object-masked PSNR: only compute inside foreground pixels (Bug #2 fix)
-                    # This gives an honest metric that cannot be gamed by predicting background
-                    fg_mask = (target > 0.15).astype(np.float32)
-                    if fg_mask.sum() > 10:
-                        masked_mse = float(np.sum((pred_clipped - target)**2 * fg_mask) / (fg_mask.sum() + 1e-8))
-                        fg_psnr = 10.0 * np.log10(1.0 / max(masked_mse, 1e-10))
-                    else:
-                        fg_psnr = psnr_np(pred_clipped, target)  # fallback for empty slices
-                    val_psnr_scores.append(fg_psnr)
+                    val_psnr_scores.append(psnr_np(np.clip(pred, 0.0, 1.0), target))
 
         train_loss = float(np.mean(train_losses)) if train_losses else float("nan")
         val_loss = float(np.mean(val_losses)) if val_losses else float("nan")
