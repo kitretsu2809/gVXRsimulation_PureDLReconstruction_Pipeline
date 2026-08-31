@@ -227,8 +227,11 @@ class DomainTransformNet(nn.Module):
         # 1. Extract structural features from sinogram
         sino_feats = self.sino_encoder(sino)
         
-        # 2. Provide a structural prior via bilinear interpolation
-        img_prior = F.interpolate(sino, size=(self.target_size, self.target_size), mode='bilinear', align_corners=False)
+        # 2. Start from a zero canvas — the cross-attention must learn the full inverse Radon
+        # transform from scratch. Using a bilinear-resized sinogram as prior caused sinogram
+        # stripe artefacts to bleed directly into the reconstruction output (Bug #3 fix).
+        B = sino.shape[0]
+        img_prior = torch.zeros(B, 1, self.target_size, self.target_size, device=sino.device, dtype=sino.dtype)
         
         # 3. Image Grid Encoder
         x1 = self.inc(img_prior)

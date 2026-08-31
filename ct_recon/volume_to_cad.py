@@ -54,6 +54,17 @@ def export_volume_to_cad(
     """
     # Auto-detect isovalue using Otsu thresholding if not provided
     if isovalue is None:
+        vol_std = float(volume.std())
+        vol_range = float(volume.max() - volume.min())
+        if vol_range < 0.05 or vol_std < 0.01:
+            print(f"⚠️  WARNING: Volume has near-zero dynamic range (std={vol_std:.4f}, range={vol_range:.4f}).")
+            print("   This means the model failed to reconstruct object structure.")
+            print("   The model needs to be retrained. Skipping CAD export.")
+            raise ValueError(
+                f"Volume has near-zero dynamic range (std={vol_std:.4f}). "
+                "The model output is a uniform gray blob — no object surface can be extracted. "
+                "Please retrain the model with the weighted foreground loss fix."
+            )
         print("Auto-detecting isovalue using Otsu's method...")
         isovalue = threshold_otsu(volume)
         print(f"Computed Otsu isovalue: {isovalue:.4f}")

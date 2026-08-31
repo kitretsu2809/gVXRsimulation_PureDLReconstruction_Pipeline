@@ -103,10 +103,13 @@ def main():
     dense_angle_count = int(attenuation.shape[0])
     sparse_indices = np.arange(0, dense_angle_count, metadata["sparse_step"], dtype=np.int32)
     
-    sino_scale = float(np.percentile(attenuation, 99.9))
+    # Bug #4 fix: ALWAYS use the sinogram_scale the model was trained with.
+    # Recomputing sino_scale from the test sample creates a scale mismatch.
+    # E.g. model trained on copper (scale=10.82) vs lizard (scale=1.37) → 7.9x mismatch.
+    sino_scale = float(metadata["sinogram_scale"])
     if sino_scale <= 0:
-        sino_scale = float(attenuation.max()) if attenuation.max() > 0 else 1.0
-    print(f"Calculated sample dynamic sinogram scale: {sino_scale:.4f}")
+        sino_scale = 1.0
+    print(f"Using checkpoint sinogram scale: {sino_scale:.4f}")
     
     row_start, row_stop = compute_row_range(geometry.zmin, geometry.zmax, metadata["downsample_factor"])
     
@@ -143,8 +146,13 @@ def main():
         with torch.no_grad():
             final_image, _, _ = model(batch_tensor)
             
-        # Predictions are directly in the [0, 1] normalized density space
+        # Bug #5 fix: Apply inverse normalization to restore physical attenuation units.
+        # Model was trained on targets normalized as: (value - image_min) / (image_max - image_min).
+        # Without inverting this, the volume contains wrong physical values and Otsu/marching-cubes fails.
+        image_min = float(metadata.get("image_min", 0.0))
+        image_max = float(metadata.get("image_max", 1.0))
         predictions = np.clip(final_image.squeeze(1).cpu().numpy(), 0.0, 1.0)
+        predictions = predictions * (image_max - image_min) + image_min
         
         # Save to volume
         for b_idx, vol_idx in enumerate(idxs):
