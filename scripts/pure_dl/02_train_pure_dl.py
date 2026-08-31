@@ -124,13 +124,10 @@ def main():
         if metadata is None:
             metadata = meta
         if observed_target_size is None:
-            if meta is not None and hasattr(meta, "image_size") and meta.image_size is not None:
+            if target_images.ndim in (3, 4):
+                observed_target_size = int(target_images.shape[-1])
+            elif meta is not None and hasattr(meta, "image_size") and meta.image_size is not None:
                 observed_target_size = meta.image_size
-            else:
-                if target_images.ndim in (3, 4):
-                    observed_target_size = target_images.shape[-1]
-                else:
-                    raise ValueError("Unable to infer target image size from dataset")
             
         train_indices, val_indices = split_indices(len(input_sinograms), args.val_fraction, args.seed)
         train_datasets.append(DualDomainDataset(input_sinograms, target_sinograms, target_images, train_indices))
@@ -146,13 +143,11 @@ def main():
     effective_bs = args.batch_size * args.accum_steps
     print(f"Device: {device} | Physical Batch Size: {args.batch_size} | Accumulation Steps: {args.accum_steps} (Effective Batch Size: {effective_bs})")
     
-    print("Initializing PureDLPipeline...")
-    if metadata is not None and hasattr(metadata, "image_size") and metadata.image_size is not None:
-        target_size = metadata.image_size
-    elif observed_target_size is not None:
-        target_size = observed_target_size
-    else:
-        raise ValueError("image_size is not available in metadata and could not be inferred from data")
+    target_size = observed_target_size if observed_target_size is not None else (metadata.image_size if (metadata and hasattr(metadata, "image_size")) else 256)
+    print(f"Initializing PureDLPipeline for {target_size}x{target_size} reconstruction...")
+    if metadata is not None and hasattr(metadata, "image_size"):
+        metadata.image_size = target_size
+
     model = PureDLPipeline(target_image_size=target_size).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
