@@ -103,13 +103,12 @@ def main():
     dense_angle_count = int(attenuation.shape[0])
     sparse_indices = np.arange(0, dense_angle_count, metadata["sparse_step"], dtype=np.int32)
     
-    # Bug #4 fix: ALWAYS use the sinogram_scale the model was trained with.
-    # Recomputing sino_scale from the test sample creates a scale mismatch.
-    # E.g. model trained on copper (scale=10.82) vs lizard (scale=1.37) → 7.9x mismatch.
-    sino_scale = float(metadata["sinogram_scale"])
+    # Dynamic percentile scaling: normalizes the test sample's sinogram to [0, 1],
+    # matching the [0, 1] sinogram normalization used when building training datasets.
+    sino_scale = float(np.percentile(attenuation, 99.9))
     if sino_scale <= 0:
-        sino_scale = 1.0
-    print(f"Using checkpoint sinogram scale: {sino_scale:.4f}")
+        sino_scale = float(attenuation.max()) if attenuation.max() > 0 else 1.0
+    print(f"Using sample dynamic sinogram scale: {sino_scale:.4f}")
     
     row_start, row_stop = compute_row_range(geometry.zmin, geometry.zmax, metadata["downsample_factor"])
     
