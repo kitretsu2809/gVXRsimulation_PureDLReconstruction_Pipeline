@@ -146,13 +146,8 @@ def main():
         with torch.no_grad():
             final_image, _, _ = model(batch_tensor)
             
-        # Bug #5 fix: Apply inverse normalization to restore physical attenuation units.
-        # Model was trained on targets normalized as: (value - image_min) / (image_max - image_min).
-        # Without inverting this, the volume contains wrong physical values and Otsu/marching-cubes fails.
-        image_min = float(metadata.get("image_min", 0.0))
-        image_max = float(metadata.get("image_max", 1.0))
+        # Predictions are directly in normalized [0, 1] space matching training target
         predictions = np.clip(final_image.squeeze(1).cpu().numpy(), 0.0, 1.0)
-        predictions = predictions * (image_max - image_min) + image_min
         
         # Save to volume
         for b_idx, vol_idx in enumerate(idxs):
