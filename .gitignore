@@ -2,6 +2,7 @@
 data/
 outputs/
 paper/
+overleaf_paper/
 configs/
 scratch/
 *.npz
