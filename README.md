@@ -66,16 +66,16 @@ outputs/dl_reconstruction/    # predicted volume, preview, STL, OBJ
 
 ```mermaid
 flowchart LR
-    A[CAD/STL objects<br/>DATACREATION/STL] --> B[gVXR cone-beam<br/>projection simulation]
-    B --> C[Projection folders<br/>data/*/settings.cto + TIFFs]
-    C --> D[FDK/ASTRA reconstruction<br/>offline target + baseline]
-    C --> E[Sparse-view sinogram dataset<br/>.npz files]
+    A["CAD/STL objects"] --> B["gVXR cone-beam projection simulation"]
+    B --> C["Projection folders with settings.cto and TIFFs"]
+    C --> D["FDK/ASTRA reconstruction: offline target and baseline"]
+    C --> E["Sparse-view sinogram dataset: NPZ files"]
     D --> E
-    E --> F[Dual-domain neural model<br/>Sinogram U-Net + differentiable FBP + attention + Image U-Net]
-    F --> G[Predicted 2D slices]
-    G --> H[Stacked 3D volume<br/>TIF]
-    H --> I[CAD export<br/>Otsu + marching cubes + smoothing]
-    I --> J[STL / OBJ mesh]
+    E --> F["Dual-domain neural model"]
+    F --> G["Predicted 2D slices"]
+    G --> H["Stacked 3D volume: TIF"]
+    H --> I["CAD export: Otsu, marching cubes, smoothing"]
+    I --> J["STL / OBJ mesh"]
 ```
 
 ## Architecture
@@ -360,16 +360,3 @@ This makes the project useful for studying CT reconstruction quality at both ima
 - Slice-wise inference does not explicitly enforce 3D consistency.
 - The object/material dataset is modest compared with real industrial CT diversity.
 - Real scanner effects such as scatter, beam hardening, detector drift, and calibration error require additional validation.
-
-## Citation
-
-If you use this repository, cite the repository and relevant dependencies such as gVXR, ASTRA, FDK, SSIM, and marching cubes where applicable.
-
-```bibtex
-@misc{gvxr_dualdomain_ct_2026,
-  title = {Dual-Domain Neural CT Reconstruction from X-Ray Simulation to CAD-Ready Geometry},
-  author = {Kumar, Pushkar and collaborators},
-  year = {2026},
-  note = {Research code for simulated sparse-view CT reconstruction and CAD export}
-}
-```

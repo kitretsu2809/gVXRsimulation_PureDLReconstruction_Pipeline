@@ -5,7 +5,7 @@ This guide walks you through the entire process of simulating physical CT data u
 ## Prerequisites
 Open a terminal and activate your Conda environment:
 ```bash
-cd /home/kitretsu/Desktop/PureDL_gVXR_Pipeline
+cd /path/to/gVXRsimulation_PureDLReconstruction_Pipeline
 conda activate ct_pipeline
 ```
 *(If you need to set up the environment, simply run `pip install -r requirements.txt`)*
